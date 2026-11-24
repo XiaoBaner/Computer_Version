@@ -15,15 +15,18 @@ concurrency:
 
 jobs:
   contract:
-    runs-on: ubuntu-latest
+    # ubuntu-latest 已滚动到 26.04，没有 3.11 的预编译包；固定 24.04 LTS。
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # CI 只要求 CPython 3.11。.python-version 里的 3.11.11 是本地 pyenv
+      # 的精确补丁号，GitHub 托管镜像未必提供，所以这里用浮动的 3.11。
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version-file: .python-version
+          python-version: "3.11"
           cache: pip
 
       - name: Install base dependencies

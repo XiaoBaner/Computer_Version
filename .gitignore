@@ -1,0 +1,62 @@
+# macOS
+.DS_Store
+._*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+build/
+dist/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE / editor
+.idea/
+.vscode/
+.claude/settings.local.json
+
+# Node (only if web/ adds a build step)
+node_modules/
+
+# Secrets and local config; keep the template
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+
+# Flask runtime data: SQLite, uploads, logs, cached media
+instance/
+*.sqlite
+*.sqlite3
+*.sqlite3-journal
+*.sqlite-wal
+*.sqlite-shm
+*.db
+*.log
+logs/
+
+# Datasets, recordings and model weights stay local.
+# Force-add a small, license-cleared fixture if the team agrees.
+datasets/
+data/
+recordings/
+models/
+*.pt
+*.pth
+*.onnx
+*.safetensors
+*.ckpt
+*.h5

@@ -1,0 +1,286 @@
+{
+  "version": 1,
+  "common": {
+    "v": "version",
+    "type": "string",
+    "session_id": "string"
+  },
+  "types": {
+    "version": {
+      "const": 1
+    },
+    "string": {
+      "type": "string",
+      "minLength": 1
+    },
+    "uint": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "score": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "bool": {
+      "type": "boolean"
+    },
+    "pcm": {
+      "enum": [
+        "pcm_s16le"
+      ]
+    },
+    "mic_rate": {
+      "enum": [
+        16000
+      ]
+    },
+    "output_rate": {
+      "enum": [
+        16000,
+        24000
+      ]
+    },
+    "base64": {
+      "type": "string",
+      "contentEncoding": "base64"
+    },
+    "quality": {
+      "enum": [
+        "good",
+        "low",
+        "unavailable"
+      ]
+    },
+    "vision_event": {
+      "enum": [
+        "mouth_motion",
+        "head_turn",
+        "unavailable",
+        "model_result"
+      ]
+    },
+    "voice_style": {
+      "enum": [
+        "neutral",
+        "gentle",
+        "practice",
+        "check_in"
+      ]
+    },
+    "turn_state": {
+      "enum": [
+        "ready",
+        "listening",
+        "waiting",
+        "preparing",
+        "speaking",
+        "interrupted",
+        "closing"
+      ]
+    },
+    "expression": {
+      "enum": [
+        "neutral",
+        "attentive",
+        "concern",
+        "thoughtful",
+        "clarify",
+        "relief",
+        "interrupted"
+      ]
+    },
+    "scene": {
+      "enum": [
+        "default",
+        "quiet",
+        "practice"
+      ]
+    },
+    "playback": {
+      "enum": [
+        "started",
+        "ended",
+        "cancelled",
+        "shown"
+      ]
+    },
+    "memory_kind": {
+      "enum": [
+        "preference",
+        "follow_up"
+      ]
+    },
+    "labels": {
+      "type": "array",
+      "items": {
+        "label_id": "string",
+        "score": "score"
+      }
+    }
+  },
+  "events": {
+    "session.ready": {
+      "from": [
+        "client"
+      ],
+      "required": {
+        "audio_output": "bool"
+      }
+    },
+    "input.audio": {
+      "from": [
+        "client"
+      ],
+      "required": {
+        "seq": "uint",
+        "t_ms": "uint",
+        "sample_rate": "mic_rate",
+        "codec": "pcm",
+        "data": "base64"
+      }
+    },
+    "input.text": {
+      "from": [
+        "client"
+      ],
+      "required": {
+        "input_id": "string",
+        "text": "string"
+      }
+    },
+    "vision.event": {
+      "from": [
+        "client"
+      ],
+      "required": {
+        "seq": "uint",
+        "t_ms": "uint",
+        "event": "vision_event",
+        "confidence": "score",
+        "quality": "quality"
+      },
+      "optional": {
+        "labels": "labels",
+        "model_version": "string"
+      }
+    },
+    "transcript": {
+      "from": [
+        "server"
+      ],
+      "required": {
+        "input_id": "string",
+        "text": "string",
+        "is_final": "bool"
+      }
+    },
+    "turn.state": {
+      "from": [
+        "server"
+      ],
+      "required": {
+        "turn_id": "string",
+        "state": "turn_state",
+        "reason": "string"
+      },
+      "optional": {
+        "expression": "expression",
+        "input_id": "string"
+      }
+    },
+    "reply.text": {
+      "from": [
+        "server"
+      ],
+      "required": {
+        "turn_id": "string",
+        "sentence_id": "string",
+        "text": "string",
+        "voice_style": "voice_style"
+      }
+    },
+    "reply.audio": {
+      "from": [
+        "server"
+      ],
+      "required": {
+        "turn_id": "string",
+        "sentence_id": "string",
+        "seq": "uint",
+        "sample_rate": "output_rate",
+        "codec": "pcm",
+        "data": "base64",
+        "is_last": "bool"
+      }
+    },
+    "reply.playback": {
+      "from": [
+        "client"
+      ],
+      "required": {
+        "turn_id": "string",
+        "sentence_id": "string",
+        "state": "playback",
+        "t_ms": "uint"
+      }
+    },
+    "turn.cancel": {
+      "from": [
+        "client",
+        "server"
+      ],
+      "required": {
+        "turn_id": "string",
+        "reason": "string"
+      }
+    },
+    "scene.set": {
+      "from": [
+        "server"
+      ],
+      "required": {
+        "scene_id": "scene",
+        "transition_ms": "uint",
+        "reason": "string"
+      },
+      "optional": {
+        "turn_id": "string"
+      }
+    },
+    "memory.saved": {
+      "from": [
+        "server"
+      ],
+      "required": {
+        "memory_id": "string",
+        "kind": "memory_kind"
+      }
+    },
+    "memory.propose": {
+      "from": [
+        "server"
+      ],
+      "required": {
+        "draft_id": "string",
+        "kind": "memory_kind",
+        "text": "string",
+        "source_turn_id": "string"
+      }
+    },
+    "session.error": {
+      "from": [
+        "server"
+      ],
+      "required": {
+        "code": "string",
+        "message": "string",
+        "retryable": "bool"
+      },
+      "optional": {
+        "turn_id": "string",
+        "sentence_id": "string"
+      }
+    }
+  }
+}

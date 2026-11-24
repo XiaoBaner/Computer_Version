@@ -1,0 +1,664 @@
+[
+  {
+    "id": "opening-interrupt",
+    "title": "有声开场被打断，模拟静音 PCM 块，取消后有迟到数据",
+    "frames": [
+      {
+        "from": "client",
+        "expect": "handle",
+        "message": {
+          "v": 1,
+          "type": "session.ready",
+          "session_id": "S1",
+          "audio_output": true
+        }
+      },
+      {
+        "from": "server",
+        "expect": "handle",
+        "message": {
+          "v": 1,
+          "type": "turn.state",
+          "session_id": "S1",
+          "turn_id": "R0",
+          "state": "preparing",
+          "reason": "opening"
+        }
+      },
+      {
+        "from": "server",
+        "expect": "handle",
+        "message": {
+          "v": 1,
+          "type": "reply.text",
+          "session_id": "S1",
+          "turn_id": "R0",
+          "sentence_id": "Q0",
+          "text": "你好，今天想从哪里聊起？",
+          "voice_style": "neutral"
+        }
+      },
+      {
+        "from": "server",
+        "expect": "handle",
+        "message": {
+          "v": 1,
+          "type": "reply.audio",
+          "session_id": "S1",
+          "turn_id": "R0",
+          "sentence_id": "Q0",
+          "seq": 0,
+          "sample_rate": 16000,
+          "codec": "pcm_s16le",
+          "data": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+          "is_last": false
+        }
+      },
+      {
+        "from": "client",
+        "expect": "handle",
+        "message": {
+          "v": 1,
+          "type": "reply.playback",
+          "session_id": "S1",
+          "turn_id": "R0",
+          "sentence_id": "Q0",
+          "state": "started",
+          "t_ms": 205
+        }
+      },
+      {
+        "from": "server",
+        "expect": "handle",
+        "message": {
+          "v": 1,
+          "type": "turn.state",
+          "session_id": "S1",
+          "turn_id": "R0",
+          "state": "speaking",
+          "reason": "playback_started",
+          "expression": "attentive"
+        }
+      },
+      {
+        "from": "client",
+        "expect": "handle",
+        "message": {
+          "v": 1,
+          "type": "input.audio",
+          "session_id": "S1",
+          "seq": 0,
+          "t_ms": 380,
+          "sample_rate": 16000,
+          "codec": "pcm_s16le",
+          "data": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+        }
+      },
+      {
+        "from": "client",
+        "expect": "handle",
+        "message": {
+          "v": 1,
+          "type": "turn.cancel",
+          "session_id": "S1",
+          "turn_id": "R0",
+          "reason": "barge_in"
+        }
+      },
+      {
+        "from": "client",
+        "expect": "handle",
+        "message": {
+          "v": 1,
+          "type": "reply.playback",
+          "session_id": "S1",
+          "turn_id": "R0",
+          "sentence_id": "Q0",
+          "state": "cancelled",
+          "t_ms": 420
+        }
+      },
+      {
+        "from": "server",
+        "expect": "already_cancelled",
+        "message": {
+          "v": 1,
+          "type": "turn.cancel",
+          "session_id": "S1",
+          "turn_id": "R0",
+          "reason": "barge_in"
+        }
+      },
+      {
+        "from": "server",
+        "expect": "drop_cancelled",
+        "message": {
+          "v": 1,
+          "type": "reply.audio",
+          "session_id": "S1",
+          "turn_id": "R0",
+          "sentence_id": "Q0",
+          "seq": 1,
+          "sample_rate": 16000,
+          "codec": "pcm_s16le",
+          "data": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+          "is_last": true
+        }
+      },
+      {
+        "from": "server",
+        "expect": "handle",
+        "message": {
+          "v": 1,
+          "type": "transcript",
+          "session_id": "S1",
+          "input_id": "I1",
+          "text": "我想",
+          "is_final": false
+        }
+      },
+      {
+        "from": "server",
+        "expect": "handle",
+        "message": {
+          "v": 1,
+          "type": "transcript",
+          "session_id": "S1",
+          "input_id": "I1",
+          "text": "我想先说一件事。",
+          "is_final": true
+        }
+      },
+      {
+        "from": "server",
+        "expect": "handle",
+        "message": {
+          "v": 1,
+          "type": "turn.state",
+          "session_id": "S1",
+          "turn_id": "R1",
+          "input_id": "I1",
+          "state": "preparing",
+          "reason": "final_input"
+        }
+      },
+      {
+        "from": "server",
+        "expect": "handle",
+        "message": {
+          "v": 1,
+          "type": "reply.text",
+          "session_id": "S1",
+          "turn_id": "R1",
+          "sentence_id": "Q1",
+          "text": "好，我听着。",
+          "voice_style": "gentle"
+        }
+      },
+      {
+        "from": "server",
+        "expect": "handle",
+        "message": {
+          "v": 1,
+          "type": "reply.audio",
+          "session_id": "S1",
+          "turn_id": "R1",
+          "sentence_id": "Q1",
+          "seq": 0,
+          "sample_rate": 16000,
+          "codec": "pcm_s16le",
+          "data": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+          "is_last": true
+        }
+      },
+      {
+        "from": "client",
+        "expect": "handle",
+        "message": {
+          "v": 1,
+          "type": "reply.playback",
+          "session_id": "S1",
+          "turn_id": "R1",
+          "sentence_id": "Q1",
+          "state": "started",
+          "t_ms": 1280
+        }
+      },
+      {
+        "from": "client",
+        "expect": "handle",
+        "message": {
+          "v": 1,
+          "type": "reply.playback",
+          "session_id": "S1",
+          "turn_id": "R1",
+          "sentence_id": "Q1",
+          "state": "ended",
+          "t_ms": 1300
+        }
+      }
+    ]
+  },
+  {
+    "id": "text-and-memory",
+    "title": "摄像头不可用、文字开场、明确要求保存偏好",
+    "frames": [
+      {
+        "from": "client",
+        "expect": "handle",
+        "message": {
+          "v": 1,
+          "type": "session.ready",
+          "session_id": "S2",
+          "audio_output": false
+        }
+      },
+      {
+        "from": "server",
+        "expect": "handle",
+        "message": {
+          "v": 1,
+          "type": "turn.state",
+          "session_id": "S2",
+          "turn_id": "R0",
+          "state": "preparing",
+          "reason": "opening"
+        }
+      },
+      {
+        "from": "server",
+        "expect": "handle",
+        "message": {
+          "v": 1,
+          "type": "reply.text",
+          "session_id": "S2",
+          "turn_id": "R0",
+          "sentence_id": "Q0",
+          "text": "你好，你可以从最想说的地方开始。",
+          "voice_style": "neutral"
+        }
+      },
+      {
+        "from": "client",
+        "expect": "handle",
+        "message": {
+          "v": 1,
+          "type": "reply.playback",
+          "session_id": "S2",
+          "turn_id": "R0",
+          "sentence_id": "Q0",
+          "state": "shown",
+          "t_ms": 90
+        }
+      },
+      {
+        "from": "client",
+        "expect": "handle",
+        "message": {
+          "v": 1,
+          "type": "vision.event",
+          "session_id": "S2",
+          "seq": 0,
+          "t_ms": 150,
+          "event": "unavailable",
+          "quality": "unavailable",
+          "confidence": 0
+        }
+      },
+      {
+        "from": "client",
+        "expect": "handle",
+        "message": {
+          "v": 1,
+          "type": "input.text",
+          "session_id": "S2",
+          "input_id": "I1",
+          "text": "记住，以后说慢一点。"
+        }
+      },
+      {
+        "from": "server",
+        "expect": "handle",
+        "message": {
+          "v": 1,
+          "type": "turn.state",
+          "session_id": "S2",
+          "turn_id": "R1",
+          "input_id": "I1",
+          "state": "preparing",
+          "reason": "final_input"
+        }
+      },
+      {
+        "from": "server",
+        "expect": "handle",
+        "message": {
+          "v": 1,
+          "type": "memory.saved",
+          "session_id": "S2",
+          "memory_id": "M1",
+          "kind": "preference"
+        }
+      },
+      {
+        "from": "server",
+        "expect": "handle",
+        "message": {
+          "v": 1,
+          "type": "reply.text",
+          "session_id": "S2",
+          "turn_id": "R1",
+          "sentence_id": "Q1",
+          "text": "记住了，以后我会说慢一点。",
+          "voice_style": "gentle"
+        }
+      },
+      {
+        "from": "client",
+        "expect": "handle",
+        "message": {
+          "v": 1,
+          "type": "reply.playback",
+          "session_id": "S2",
+          "turn_id": "R1",
+          "sentence_id": "Q1",
+          "state": "shown",
+          "t_ms": 550
+        }
+      }
+    ]
+  },
+  {
+    "id": "visual-practice",
+    "title": "文字开场、视觉事件、练习场景和待确认记忆",
+    "frames": [
+      {
+        "from": "client",
+        "expect": "handle",
+        "message": {
+          "v": 1,
+          "type": "session.ready",
+          "session_id": "S3",
+          "audio_output": false
+        }
+      },
+      {
+        "from": "server",
+        "expect": "handle",
+        "message": {
+          "v": 1,
+          "type": "turn.state",
+          "session_id": "S3",
+          "turn_id": "R0",
+          "state": "preparing",
+          "reason": "opening"
+        }
+      },
+      {
+        "from": "server",
+        "expect": "handle",
+        "message": {
+          "v": 1,
+          "type": "reply.text",
+          "session_id": "S3",
+          "turn_id": "R0",
+          "sentence_id": "Q0",
+          "text": "你好，今天想聊什么？",
+          "voice_style": "neutral"
+        }
+      },
+      {
+        "from": "client",
+        "expect": "handle",
+        "message": {
+          "v": 1,
+          "type": "reply.playback",
+          "session_id": "S3",
+          "turn_id": "R0",
+          "sentence_id": "Q0",
+          "state": "shown",
+          "t_ms": 75
+        }
+      },
+      {
+        "from": "client",
+        "expect": "handle",
+        "message": {
+          "v": 1,
+          "type": "vision.event",
+          "session_id": "S3",
+          "seq": 0,
+          "t_ms": 200,
+          "event": "mouth_motion",
+          "confidence": 0.78,
+          "quality": "good"
+        }
+      },
+      {
+        "from": "client",
+        "expect": "handle",
+        "message": {
+          "v": 1,
+          "type": "vision.event",
+          "session_id": "S3",
+          "seq": 1,
+          "t_ms": 240,
+          "event": "model_result",
+          "confidence": 0.83,
+          "quality": "good",
+          "model_version": "fixture-v1",
+          "labels": [
+            {
+              "label_id": "fixture_action",
+              "score": 0.83
+            }
+          ]
+        }
+      },
+      {
+        "from": "client",
+        "expect": "handle",
+        "message": {
+          "v": 1,
+          "type": "input.text",
+          "session_id": "S3",
+          "input_id": "I1",
+          "text": "我想练习明天跟导师怎么开口。"
+        }
+      },
+      {
+        "from": "server",
+        "expect": "handle",
+        "message": {
+          "v": 1,
+          "type": "turn.state",
+          "session_id": "S3",
+          "turn_id": "R1",
+          "input_id": "I1",
+          "state": "preparing",
+          "reason": "final_input"
+        }
+      },
+      {
+        "from": "server",
+        "expect": "handle",
+        "message": {
+          "v": 1,
+          "type": "scene.set",
+          "session_id": "S3",
+          "turn_id": "R1",
+          "scene_id": "practice",
+          "transition_ms": 900,
+          "reason": "user_requested_practice"
+        }
+      },
+      {
+        "from": "server",
+        "expect": "handle",
+        "message": {
+          "v": 1,
+          "type": "reply.text",
+          "session_id": "S3",
+          "turn_id": "R1",
+          "sentence_id": "Q1",
+          "text": "我们可以练第一句。你想怎么开头？",
+          "voice_style": "practice"
+        }
+      },
+      {
+        "from": "client",
+        "expect": "handle",
+        "message": {
+          "v": 1,
+          "type": "reply.playback",
+          "session_id": "S3",
+          "turn_id": "R1",
+          "sentence_id": "Q1",
+          "state": "shown",
+          "t_ms": 470
+        }
+      },
+      {
+        "from": "server",
+        "expect": "handle",
+        "message": {
+          "v": 1,
+          "type": "memory.propose",
+          "session_id": "S3",
+          "draft_id": "D1",
+          "kind": "follow_up",
+          "text": "下次可以继续练习如何开口。",
+          "source_turn_id": "R1"
+        }
+      }
+    ]
+  },
+  {
+    "id": "tts-fallback",
+    "title": "TTS 超时改字幕，同一会话再次 ready 后继续文字交流",
+    "frames": [
+      {
+        "from": "client",
+        "expect": "handle",
+        "message": {
+          "v": 1,
+          "type": "session.ready",
+          "session_id": "S4",
+          "audio_output": true
+        }
+      },
+      {
+        "from": "server",
+        "expect": "handle",
+        "message": {
+          "v": 1,
+          "type": "turn.state",
+          "session_id": "S4",
+          "turn_id": "R0",
+          "state": "preparing",
+          "reason": "opening"
+        }
+      },
+      {
+        "from": "server",
+        "expect": "handle",
+        "message": {
+          "v": 1,
+          "type": "reply.text",
+          "session_id": "S4",
+          "turn_id": "R0",
+          "sentence_id": "Q0",
+          "text": "你好，今天想从哪里聊起？",
+          "voice_style": "neutral"
+        }
+      },
+      {
+        "from": "server",
+        "expect": "handle",
+        "message": {
+          "v": 1,
+          "type": "session.error",
+          "session_id": "S4",
+          "turn_id": "R0",
+          "sentence_id": "Q0",
+          "code": "TTS_UNAVAILABLE",
+          "message": "语音暂时不可用，本句改用字幕。",
+          "retryable": true
+        }
+      },
+      {
+        "from": "client",
+        "expect": "handle",
+        "message": {
+          "v": 1,
+          "type": "reply.playback",
+          "session_id": "S4",
+          "turn_id": "R0",
+          "sentence_id": "Q0",
+          "state": "shown",
+          "t_ms": 3050
+        }
+      },
+      {
+        "from": "client",
+        "expect": "handle",
+        "message": {
+          "v": 1,
+          "type": "session.ready",
+          "session_id": "S4",
+          "audio_output": false
+        }
+      },
+      {
+        "from": "client",
+        "expect": "handle",
+        "message": {
+          "v": 1,
+          "type": "input.text",
+          "session_id": "S4",
+          "input_id": "I1",
+          "text": "可以，我们打字聊。"
+        }
+      },
+      {
+        "from": "server",
+        "expect": "handle",
+        "message": {
+          "v": 1,
+          "type": "turn.state",
+          "session_id": "S4",
+          "turn_id": "R1",
+          "input_id": "I1",
+          "state": "preparing",
+          "reason": "final_input"
+        }
+      },
+      {
+        "from": "server",
+        "expect": "handle",
+        "message": {
+          "v": 1,
+          "type": "reply.text",
+          "session_id": "S4",
+          "turn_id": "R1",
+          "sentence_id": "Q1",
+          "text": "好，你想从哪里说起？",
+          "voice_style": "neutral"
+        }
+      },
+      {
+        "from": "client",
+        "expect": "handle",
+        "message": {
+          "v": 1,
+          "type": "reply.playback",
+          "session_id": "S4",
+          "turn_id": "R1",
+          "sentence_id": "Q1",
+          "state": "shown",
+          "t_ms": 3800
+        }
+      }
+    ]
+  }
+]

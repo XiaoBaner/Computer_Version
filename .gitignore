@@ -1,0 +1,5 @@
+# Local ASR verification environment (not part of the deliverable)
+.venv-asr/
+__pycache__/
+*.py[cod]
+.pytest_cache/

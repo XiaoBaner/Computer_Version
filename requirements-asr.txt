@@ -1,0 +1,18 @@
+# Optional streaming ASR runtime for voice/asr (owner: 王皓).
+# Install torch separately first (project CV lock: torch==2.14.1), then this file
+# into the same .venv:
+#   python -m pip install torch==2.14.1
+#   python -m pip install -r requirements-asr.txt
+#
+# torchaudio is not required by the streaming Paraformer path and currently has
+# no 2.14.x release. If a first run reports a missing torchaudio, install a
+# torchaudio matching the torch minor version and record the change.
+#
+# Exact resolved versions, model revision, SHA-256 and licence belong in
+# docs/model-lock.md after the first real run.
+funasr==1.4.29
+modelscope==1.40.3
+soundfile==0.14.0
+# FunASR 1.4.29 needs one fbank backend. kaldi-native-fbank has an arm64 wheel
+# and avoids downgrading torch just to get a 2.11.x torchaudio.
+kaldi-native-fbank==1.23.3

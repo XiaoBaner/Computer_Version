@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<title>web/audio 自测</title>
+<style>
+  :root { color-scheme: light dark; --fg:#1b1b1f; --mut:#6b6b76; --line:#d8d8e0; --hi:#2f6f5e; }
+  @media (prefers-color-scheme: dark) { :root { --fg:#e8e8ec; --mut:#9a9aa6; --line:#33333c; --hi:#67c2a8; } }
+  body { font:15px/1.65 -apple-system,"PingFang SC",sans-serif; color:var(--fg);
+         margin:32px auto; max-width:860px; padding:0 20px; }
+  h1 { font-size:20px; margin:0 0 4px; }
+  h2 { font-size:15px; margin:26px 0 8px; color:var(--mut); font-weight:600; }
+  p.hint { color:var(--mut); margin:0 0 14px; }
+  button { font:inherit; font-size:14px; padding:7px 12px; margin:0 6px 6px 0; border-radius:8px;
+           border:1px solid var(--line); background:transparent; color:var(--fg); cursor:pointer; }
+  button:hover, button.on { border-color:var(--hi); color:var(--hi); }
+  select { font:inherit; padding:6px 8px; border-radius:8px; border:1px solid var(--line);
+           background:transparent; color:var(--fg); }
+  .meter { height:8px; background:var(--line); border-radius:4px; overflow:hidden; margin:8px 0 14px; }
+  .meter > i { display:block; height:100%; width:0; background:var(--hi); transition:width .05s linear; }
+  pre { font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; background:rgba(127,127,127,.09);
+        padding:10px 12px; border-radius:8px; height:260px; overflow:auto; margin:0; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+</style>
+
+<h1>web/audio 自测</h1>
+<p class="hint">用 <code>python3 -m http.server</code> 从仓库根目录起服务，打开这个页面。
+麦克风需要 <code>localhost</code> 或 https。所有回执时间戳都来自页面单调时钟。</p>
+
+<h2>1. 麦克风 → input.audio</h2>
+<div class="row">
+  <button id="mic">打开麦克风</button>
+  <button id="stopmic" disabled>关闭</button>
+  <span id="micstate" class="hint" style="margin:0">未开始</span>
+</div>
+<div class="meter"><i id="miclevel"></i></div>
+
+<h2>2. 复刻音频 → 播放回执</h2>
+<div class="row">
+  <select id="clip">
+    <option value="../../assets/voice/final/B/01.wav">红红 · 01 你好，今天想从哪里聊起？</option>
+    <option value="../../assets/voice/final/B/10.wav">红红 · 10 今天也辛苦了…</option>
+    <option value="../../assets/voice/final/01/11.wav">小卡 · 11 嗯，我在…</option>
+    <option value="../../assets/voice/final/13/11.wav">小U · 11 嗯，我在…</option>
+  </select>
+  <button id="play">按协议喂给播放器</button>
+  <button id="barge" disabled>播放中打断（stopTurn）</button>
+  <input id="file" type="file" accept="audio/*" hidden>
+  <button id="pick">选本地音频…</button>
+</div>
+<div class="meter"><i id="outlevel"></i></div>
+
+<h2>3. 事件日志</h2>
+<pre id="log"></pre>
+
+<script type="module">
+import { startCapture, createPlayer } from "./index.js";
+import { Resampler, float32ToInt16, base64ToBytes, int16ToFloat32, rmsOf, bytesToBase64 } from "./pcm.js";
+
+const $ = (id) => document.getElementById(id);
+const logBox = $("log");
+function log(...parts) {
+  const line = parts.join(" ");
+  logBox.textContent += line + "\n";
+  logBox.scrollTop = logBox.scrollHeight;
+}
+
+/* ---------------- 播放器 ---------------- */
+
+let activeTurn = null; // 供插话判定：正在播/准备中的回合
+const player = createPlayer({
+  onPlayback(turnId, sentenceId, state, tMs) {
+    log(`[playback] ${turnId}/${sentenceId} ${state} @${tMs}ms`);
+    if (state === "ended" || state === "cancelled") {
+      activeTurn = null;
+      $("barge").disabled = true;
+    }
+  },
+  onLevel(turnId, sentenceId, level, tMs) {
+    $("outlevel").style.width = Math.round(level * 100) + "%";
+  },
+});
+
+/** 把一段 AudioBuffer 按协议切成 reply.audio 帧喂进去。 */
+async function feedBuffer(buffer, { turnId = "R1", sentenceId = "S1", chunkMs = 20, realtime = true } = {}) {
+  await player.unlock();
+  activeTurn = turnId;
+  $("barge").disabled = false;
+
+  const rate = buffer.sampleRate;
+  let mono = buffer.getChannelData(0);
+  if (buffer.numberOfChannels > 1) {
+    const l = buffer.getChannelData(0), r = buffer.getChannelData(1);
+    mono = new Float32Array(l.length);
+    for (let i = 0; i < l.length; i++) mono[i] = (l[i] + r[i]) / 2;
+  }
+  const rs = new Resampler(rate, 24000);
+  const pcm = rs.process(mono);
+  const size = (24000 * chunkMs) / 1000;
+  const total = Math.ceil(pcm.length / size);
+
+  log(`[feed] ${turnId}/${sentenceId} ${rate}Hz → 24000Hz，${total} 块，每块 ${chunkMs}ms`);
+  for (let i = 0; i < total; i++) {
+    const piece = pcm.subarray(i * size, Math.min((i + 1) * size, pcm.length));
+    const i16 = float32ToInt16(piece);
+    player.queueAudio({
+      turn_id: turnId,
+      sentence_id: sentenceId,
+      seq: i,
+      sample_rate: 24000,
+      codec: "pcm_s16le",
+      data: bytesToBase64(new Uint8Array(i16.buffer)),
+      is_last: i === total - 1,
+    });
+    if (realtime) await new Promise((r) => setTimeout(r, chunkMs));
+  }
+}
+
+async function playUrl(url) {
+  const res = await fetch(url);
+  const bytes = await res.arrayBuffer();
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const buffer = await ctx.decodeAudioData(bytes);
+  await ctx.close();
+  await feedBuffer(buffer);
+}
+
+$("play").onclick = async () => {
+  try {
+    await playUrl($("clip").value);
+  } catch (e) {
+    log("[error] " + e.message);
+  }
+};
+
+$("pick").onclick = () => $("file").click();
+$("file").onchange = async (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const buffer = await ctx.decodeAudioData(await f.arrayBuffer());
+  await ctx.close();
+  await feedBuffer(buffer);
+};
+
+$("barge").onclick = () => {
+  const turnId = activeTurn;
+  if (!turnId) return;
+  log(`[barge] stopTurn(${turnId})`);
+  player.stopTurn(turnId);
+  activeTurn = null;
+  $("barge").disabled = true;
+};
+
+/* ---------------- 采集 ---------------- */
+
+let stopCapture = null;
+let frames = 0;
+
+$("mic").onclick = async () => {
+  try {
+    stopCapture = await startCapture({
+      onAudio(frame) {
+        frames++;
+        const bytes = base64ToBytes(frame.data);
+        const level = rmsOf(int16ToFloat32(new Int16Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 2)));
+        $("miclevel").style.width = Math.min(100, Math.round(level * 400)) + "%";
+        if (frames % 25 === 0) {
+          log(`[input.audio] seq=${frame.seq} ${frame.sample_rate}Hz ${frame.codec} ${frame.data.length}B @${frame.t_ms}ms`);
+        }
+      },
+      onInterrupt(turnId) {
+        log(`[interrupt] ${turnId} — 采集层判定用户开口`);
+        player.stopTurn(turnId);
+        activeTurn = null;
+      },
+      getActiveTurn: () => activeTurn,
+      vad: { threshold: 0.02, holdMs: 60, cooldownMs: 700 },
+    });
+    $("mic").classList.add("on");
+    $("stopmic").disabled = false;
+    $("micstate").textContent = "采集中，每 20ms 一块";
+    log("[capture] 已打开");
+  } catch (e) {
+    log("[error] " + e.message);
+  }
+};
+
+$("stopmic").onclick = async () => {
+  if (!stopCapture) return;
+  await stopCapture();
+  stopCapture = null;
+  $("mic").classList.remove("on");
+  $("stopmic").disabled = true;
+  $("micstate").textContent = "已关闭";
+  log(`[capture] 已关闭，共 ${frames} 块`);
+};
+
+window.addEventListener("pagehide", () => {
+  stopCapture?.();
+  player.dispose();
+});
+</script>
+</html>

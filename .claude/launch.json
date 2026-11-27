@@ -1,0 +1,10 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "voice-live",
+      "url": "http://127.0.0.1:8420",
+      "port": 8420
+    }
+  ]
+}

@@ -60,3 +60,15 @@ models/
 *.safetensors
 *.ckpt
 *.h5
+
+# Voice assets: only the shipped pack is versioned. References, fine-tune
+# models, audition dumps and raw recordings are ~14 GB and stay local.
+assets/voice/refs/
+assets/voice/demos/
+assets/voice/packs/
+assets/voice/packs-long/
+assets/voice/analysis/
+*.zip
+
+# ASR sandbox interpreter
+.venv-asr/

@@ -1,0 +1,148 @@
+{
+ "model": "cosyvoice-v3.5-plus",
+ "style": "rich_max",
+ "default_voice": "B",
+ "note": "同一个模型、三种复刻音色；音频已统一到 24 kHz、RMS -20 dBFS。前端按 voices 列出可选项，按 lines 里的 files 取文件。",
+ "voices": [
+  {
+   "key": "01",
+   "label": "小卡",
+   "voice_id": "cosyvoice-v3.5-plus-p351-c95cbb4bd14840fb99d2aa7e9df0d74b",
+   "reference": "assets/voice/packs/01/ref-long.wav",
+   "dir": "01"
+  },
+  {
+   "key": "B",
+   "label": "红红",
+   "voice_id": "cosyvoice-v3.5-plus-p35b-55e40918db194576a56a2d89fd8f5746",
+   "reference": "assets/voice/packs/B/ref.wav",
+   "dir": "B"
+  },
+  {
+   "key": "13",
+   "label": "小U",
+   "voice_id": "cosyvoice-v3.5-plus-v35p13-333d99fcdb53405098bf69498d032e3c",
+   "reference": "assets/voice/packs/13/ref-long.wav",
+   "dir": "13"
+  }
+ ],
+ "lines": [
+  {
+   "id": "01",
+   "text": "你好，今天想从哪里聊起？",
+   "files": {
+    "01": "01/01.wav",
+    "B": "B/01.wav",
+    "13": "13/01.wav"
+   }
+  },
+  {
+   "id": "02",
+   "text": "好，我听着。",
+   "files": {
+    "01": "01/02.wav",
+    "B": "B/02.wav",
+    "13": "13/02.wav"
+   }
+  },
+  {
+   "id": "03",
+   "text": "你好，你可以从最想说的地方开始。",
+   "files": {
+    "01": "01/03.wav",
+    "B": "B/03.wav",
+    "13": "13/03.wav"
+   }
+  },
+  {
+   "id": "04",
+   "text": "记住，以后说慢一点。",
+   "files": {
+    "01": "01/04.wav",
+    "B": "B/04.wav",
+    "13": "13/04.wav"
+   }
+  },
+  {
+   "id": "05",
+   "text": "你好，今天想聊什么？",
+   "files": {
+    "01": "01/05.wav",
+    "B": "B/05.wav",
+    "13": "13/05.wav"
+   }
+  },
+  {
+   "id": "06",
+   "text": "我们可以练第一句。你想怎么开头？",
+   "files": {
+    "01": "01/06.wav",
+    "B": "B/06.wav",
+    "13": "13/06.wav"
+   }
+  },
+  {
+   "id": "07",
+   "text": "下次可以继续练习如何开口。",
+   "files": {
+    "01": "01/07.wav",
+    "B": "B/07.wav",
+    "13": "13/07.wav"
+   }
+  },
+  {
+   "id": "08",
+   "text": "可以，我们打字聊。",
+   "files": {
+    "01": "01/08.wav",
+    "B": "B/08.wav",
+    "13": "13/08.wav"
+   }
+  },
+  {
+   "id": "09",
+   "text": "好，你想从哪里说起？",
+   "files": {
+    "01": "01/09.wav",
+    "B": "B/09.wav",
+    "13": "13/09.wav"
+   }
+  },
+  {
+   "id": "10",
+   "text": "今天也辛苦了，要不要先休息一下？",
+   "files": {
+    "01": "01/10.wav",
+    "B": "B/10.wav",
+    "13": "13/10.wav"
+   }
+  },
+  {
+   "id": "11",
+   "text": "嗯，我在。你不用急着说清楚。",
+   "files": {
+    "01": "01/11.wav",
+    "B": "B/11.wav",
+    "13": "13/11.wav"
+   }
+  },
+  {
+   "id": "10b",
+   "text": "今天也辛苦了，要不要先休息一下？",
+   "files": {
+    "01": "01/10b.wav",
+    "B": "B/10b.wav",
+    "13": "13/10b.wav"
+   }
+  },
+  {
+   "id": "11b",
+   "text": "嗯，我在。你不用急着说清楚。",
+   "files": {
+    "01": "01/11b.wav",
+    "B": "B/11b.wav",
+    "13": "13/11b.wav"
+   }
+  }
+ ]
+}

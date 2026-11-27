@@ -1,8 +1,9 @@
 # web/audio · 采集与播放
 
 王皓这一侧交给陈跃权（页面）和陈尧武（传输层）的两个入口。协议字段见
-[周末联调文档](../../docs/weekend-wire.md) 第 3 节，接口约定见
-[六人模块接口](../../docs/weekend-modules.md) 第 3 节。
+[周末联调文档](../../../docs/weekend-wire.md) 第 3 节，接口约定见
+[六人模块接口](../../../docs/weekend-modules.md) 第 3 节。仓库根的 `web/audio/`
+是一行转发，页面照旧 `import ... from "/web/audio/index.js"`。
 
 ```
 web/audio/

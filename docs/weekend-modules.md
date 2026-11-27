@@ -55,6 +55,10 @@ Flask 在服务端按用户分区生成可重复的 `request_id`。聊天写入�
 
 ## 3. 王皓 → 陈尧武、陈跃权
 
+代码在 `wanghao/` 下（按人分目录，便于最后统一组装）。下表的导入路径不变：仓库根
+`voice/`、`web/audio/` 是一行转发，`from voice.asr import open_stream` 与
+`/web/audio/index.js` 照旧可用。
+
 | 周末实现入口 | 参数、结果与使用方式 |
 | --- | --- |
 | `voice.asr.open_stream(session_id, on_transcript) -> stream` | 服务端每会话持有一份状态。`stream.feed(pcm: bytes, seq: int, t_ms: int)` 接收有序 16 kHz 单声道有符号 16 位小端裸 PCM，`close()` 清状态。回调 `on_transcript(input_id: str, text: str, is_final: bool)`，同一语音段共用一个 ID。语音 ID 由服务端生成，与键盘输入区分 |

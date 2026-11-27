@@ -16,9 +16,9 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))  # wanghao/tools/voice → 仓库根
 
-from voice import tts  # noqa: E402
+from wanghao.voice import tts  # noqa: E402
 
 LINE = "嗯，我在。你不用急着说清楚，想到哪儿说到哪儿就行。"
 

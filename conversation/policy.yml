@@ -1,0 +1,11 @@
+{
+  "version": "weekend-v1",
+  "intents": ["listen", "reflect", "clarify", "offer_option", "practice"],
+  "voice_styles": ["neutral", "gentle", "practice", "check_in"],
+  "max_sentences": 2,
+  "max_chars_per_sentence": 60,
+  "max_clarifications": 1,
+  "priorities": ["server_policy", "current_user", "authorized_background", "observations"],
+  "checks": ["diagnosis", "medication", "unsupported_agreement", "third_party_motive", "fabricated_memory", "ignored_correction", "unavailable_capability", "immediate_danger", "turn_cancelled"],
+  "routes": ["urgent", "urgent_medical", "urgent_others", "safety_check", "medication", "diagnosis", "correction", "memory", "recall", "quiet", "suspicion", "boundary", "clarify", "practice", "listen"]
+}

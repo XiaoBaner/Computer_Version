@@ -35,7 +35,10 @@ import uuid
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+HERE = Path(__file__).resolve().parent      # wanghao/voice
+PKG = HERE.parent                           # wanghao
+ROOT = PKG.parent                           # 仓库根：静态服务从这里起，页面地址才能是 /wanghao/...
+ASSETS = PKG / "assets" / "voice" / "final"
 CREDS: str | None = None
 TTS_MODE = "clips"      # clips | cloud
 SESSIONS: dict[str, "Session"] = {}
@@ -98,7 +101,7 @@ def _clip_audio(voice: str, clip_id: str, rate: float = 1.0) -> tuple[bytes, int
     import audioop
     import wave
 
-    path = ROOT / "assets" / "voice" / "final" / voice / f"{clip_id}.wav"
+    path = ASSETS / voice / f"{clip_id}.wav"
     with wave.open(str(path), "rb") as w:
         pcm, hz = w.readframes(w.getnframes()), w.getframerate()
     if abs(rate - 1.0) > 0.02:
@@ -108,7 +111,7 @@ def _clip_audio(voice: str, clip_id: str, rate: float = 1.0) -> tuple[bytes, int
 
 def _clip_text(clip_id: str) -> str:
     """成品里那句话的原文，保证字幕与声音对得上。"""
-    manifest = json.loads((ROOT / "assets" / "voice" / "final" / "manifest.json").read_text())
+    manifest = json.loads((ASSETS / "manifest.json").read_text())
     for line in manifest["lines"]:
         if line["id"] == clip_id:
             return line["text"]
@@ -119,7 +122,7 @@ class Session:
     """一个浏览器标签页：一条 ASR 流 + 一条 SSE 事件队列。"""
 
     def __init__(self) -> None:
-        from voice import asr
+        from . import asr
 
         self.id = uuid.uuid4().hex[:8]
         self.events: queue.Queue[dict | None] = queue.Queue()
@@ -257,7 +260,7 @@ class Session:
 
             speed = self.effective_rate
             if TTS_MODE == "cloud":
-                from voice import tts
+                from . import tts
 
                 reply = pick_reply(heard)
                 voice_id = _cloud_voice_id(self.voice)
@@ -449,7 +452,7 @@ def main() -> None:
     os.environ["VOICE_ASR_BACKEND"] = backend
 
     if backend == "funasr":
-        from voice.asr import AsrUnavailable, warmup
+        from .asr import AsrUnavailable, warmup
 
         print("预热 FunASR（首次会加载模型，约十几秒）…", flush=True)
         try:
@@ -461,7 +464,7 @@ def main() -> None:
 
     srv = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     print(f"联调台已起：识别 {os.environ['VOICE_ASR_BACKEND']}，配音 {TTS_MODE}\n"
-          f"http://127.0.0.1:{args.port}/tools/voice/live.html", flush=True)
+          f"http://127.0.0.1:{args.port}/wanghao/tools/voice/live.html", flush=True)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

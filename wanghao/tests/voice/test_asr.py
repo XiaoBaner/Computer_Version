@@ -12,13 +12,13 @@ from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]  # wanghao/tests/voice → 仓库根
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tools"))
 
 from replay_contract import validate_message  # noqa: E402
-from voice.asr import AsrUnavailable, create_backend, open_stream  # noqa: E402
-from voice.asr.errors import AsrError  # noqa: E402
+from wanghao.voice.asr import AsrUnavailable, create_backend, open_stream  # noqa: E402
+from wanghao.voice.asr.errors import AsrError  # noqa: E402
 
 CATALOG = json.loads((ROOT / "contracts" / "events.v1.json").read_text("utf-8"))
 
@@ -452,7 +452,7 @@ def test_funasr_adapter_chunks_at_600ms_and_flushes_the_tail(monkeypatch):
 
     import types
 
-    import voice.asr.backends as backends
+    import wanghao.voice.asr.backends as backends
 
     class FakeArray:
         def __init__(self, samples: int) -> None:

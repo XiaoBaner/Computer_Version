@@ -4,19 +4,19 @@
 **流式合成**在服务端（这里），**WebSocket 传输**归陈尧武，**页面**归陈跃权。
 
 ```
-voice/asr/            识别（PR #2，FunASR 本地流式 Paraformer）
-  __init__.py         open_stream / warmup / 错误类型
-  stream.py           分段、input_id、临时/最终转写、积压与 seq 缺口
-  backends.py         funasr / fixture 两个后端
-  README.md           参数、实测表、风险
-voice/tts.py          合成：synthesize(text, voice_style, cancelled) -> Iterator[(pcm, sr)]
-voice/live_server.py  联调台：把三段串起来，浏览器点一下就能对话
-tools/asr/feed_wav.py 把一段 wav 当麦克风喂进去，逐行打印 Flask 该发的帧
-tools/voice/live.html 联调台的页面
-tools/voice/stream_probe.py  量首包延迟
+wanghao/voice/asr/            识别（PR #2，FunASR 本地流式 Paraformer）
+  __init__.py                 open_stream / warmup / 错误类型
+  stream.py                   分段、input_id、临时/最终转写、积压与 seq 缺口
+  backends.py                 funasr / fixture 两个后端
+  README.md                   参数、实测表、风险
+wanghao/voice/tts.py          合成：synthesize(text, voice_style, cancelled) -> Iterator[(pcm, sr)]
+wanghao/voice/live_server.py  联调台：把三段串起来，浏览器点一下就能对话
+wanghao/tools/asr/feed_wav.py 把一段 wav 当麦克风喂进去，逐行打印 Flask 该发的帧
+wanghao/tools/voice/live.html 联调台的页面
+wanghao/tools/voice/stream_probe.py  量首包延迟
 ```
 
-识别不在这里重新实现——`voice/asr/` 是「ASR 任务处理」那个会话的产物，
+识别不在这里重新实现——`wanghao/voice/asr/` 是「ASR 任务处理」那个会话的产物，
 按 `docs/weekend-modules.md` 第 3 节交付，本目录只负责把它和合成、页面接起来。
 
 ## 联调台怎么跑
@@ -24,16 +24,16 @@ tools/voice/stream_probe.py  量首包延迟
 ```bash
 # 真识别（FunASR 本地，不联网）+ 本地成品配音
 /Users/haowang/Desktop/Computer_Version/.claude/worktrees/blue-saber-console-ui-3042d9/.venv-asr/bin/python \
-    -m voice.live_server
+    -m wanghao.voice.live_server
 
 # 真识别 + 云端复刻音色
-…/.venv-asr/bin/python -m voice.live_server --creds ~/Desktop/xxx-apiKey-xxx.csv
+…/.venv-asr/bin/python -m wanghao.voice.live_server --creds ~/Desktop/xxx-apiKey-xxx.csv
 
 # 没装 FunASR：固定脚本识别，只验时序
-python3 -m voice.live_server --asr fixture
+python3 -m wanghao.voice.live_server --asr fixture
 ```
 
-浏览器打开 `http://127.0.0.1:8420/tools/voice/live.html`，点「开始对话」。
+浏览器打开 `http://127.0.0.1:8420/wanghao/tools/voice/live.html`，点「开始对话」。
 安静时不出字；说完停顿 900 ms 才出最终转写并触发回复；她说话时你开口会停声。
 
 页面右上角会写明当前是哪个识别模型、配音走云端还是本地成品。
@@ -73,10 +73,10 @@ python3 -m voice.live_server --asr fixture
 | 项 | 结果 |
 | --- | --- |
 | 真识别整条链（麦克风帧 → FunASR → 回复 → 成品音频 → 播放回执） | 通过 |
-| 用 `assets/voice/final/B/01.wav` 当输入 | 「你好今天想从哪里聊起」，首个转写 910 ms |
+| 用 `wanghao/assets/voice/final/B/01.wav` 当输入 | 「你好今天想从哪里聊起」，首个转写 910 ms |
 | 分句 | `end_silence_ms=700` 会切成「你好」+「今天想从哪里聊起」两句，联调台改 900 合成一句 |
 | 上行 20 ms 分帧、末块 `is_last`、取消打断 | 通过 |
-| 云端合成首包延迟 | **未测**，等凭据（`tools/voice/stream_probe.py` 已备好） |
+| 云端合成首包延迟 | **未测**，等凭据（`wanghao/tools/voice/stream_probe.py` 已备好） |
 
 ## 凭据
 

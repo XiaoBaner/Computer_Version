@@ -22,10 +22,10 @@ import time
 import wave
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]  # wanghao/tools/asr → 仓库根
 sys.path.insert(0, str(ROOT))
 
-from voice.asr import AsrUnavailable, open_stream, warmup  # noqa: E402
+from wanghao.voice.asr import AsrUnavailable, open_stream, warmup  # noqa: E402
 
 
 def _fail(message: str, code: int = 2) -> None:

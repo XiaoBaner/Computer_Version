@@ -138,6 +138,9 @@ class Session:
         self._reason = ""
         self._speech_start_ms: int | None = None
         self._last_speech_ms = 0
+        self._last_end_ms: int | None = None
+        self._level_peak = 0.0
+        self._speech_start_pc: float | None = None  # ASR 给的是 onset 时刻，不是当前时刻
 
         self.stream = asr.open_stream(
             self.id,
@@ -153,8 +156,33 @@ class Session:
         self.emit({"type": "transcript", "input_id": input_id, "text": text,
                    "is_final": is_final})
         if is_final and text.strip():
+            self._emit_features(input_id, text)
             self._adapt(text)
             threading.Thread(target=self._speak, args=(text,), daemon=True).start()
+
+    # -- 语音侧的辅助证据 ------------------------------------------------
+    def _emit_features(self, input_id: str, text: str) -> None:
+        """一句话的语气特征，供视觉为主的融合层当佐证，不单独决定话轮。
+
+        视觉在前：嘴部动作能比能量 VAD 早 100–200 ms 发现"他要开口"；这里给的是
+        声音侧的冗余确认（唇动与语音是否一致）和摄像头不可用时的兜底依据。
+        """
+        import re
+
+        chars = len(re.sub(r"[^0-9A-Za-z一-鿿]", "", text))
+        if self._speech_start_pc is not None:  # 最终转写常早于能量 VAD 收段
+            live = int((time.perf_counter() - self._speech_start_pc) * 1000)
+            self._last_speech_ms = max(self._last_speech_ms, live)
+        ms = self._last_speech_ms
+        secs = ms / 1000
+        self.emit({
+            "type": "speech_features",
+            "input_id": input_id,
+            "chars": chars,
+            "speech_ms": ms,
+            "chars_per_sec": round(chars / secs, 2) if secs else None,
+            "level_peak": round(self._level_peak, 4),
+        })
 
     # -- 语速 -----------------------------------------------------------
     def _adapt(self, text: str) -> None:
@@ -197,9 +225,16 @@ class Session:
         # 120 ms 能量 VAD 比 600 ms 的首个转写快，先给页面一个"他开口了"的候选
         if active and self._speech_start_ms is None:
             self._speech_start_ms = t_ms
+            self._speech_start_pc = time.perf_counter()
+            self._level_peak = level
+        elif active:
+            self._level_peak = max(self._level_peak, level)
         elif not active and self._speech_start_ms is not None:
-            self._last_speech_ms = max(0, t_ms - self._speech_start_ms)
+            if self._speech_start_pc is not None:
+                self._last_speech_ms = int((time.perf_counter() - self._speech_start_pc) * 1000)
             self._speech_start_ms = None
+            self._speech_start_pc = None
+            self._last_end_ms = t_ms
         self.emit({"type": "speech", "active": active, "t_ms": t_ms,
                    "level": round(level, 4)})
 

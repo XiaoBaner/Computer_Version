@@ -63,30 +63,6 @@ def squash(text):
     return re.sub(r"\s+", "", unicodedata.normalize("NFKC", text))
 
 
-_NEGATION = re.compile(r"(不|别|没|无|勿|莫|未)(想|喜欢|要|用|记|再|会|能|打算|准备)?$")
-
-
-def grant_covers(excerpt, value):
-    """True when the excerpt really authorizes this exact item.
-
-    A plain substring test lets "不喜欢慢速" authorize "喜欢慢速" and "别记今天失眠"
-    authorize "今天失眠": the match starts right after the negation, so the saved
-    item means the opposite. Every occurrence is therefore checked for a negation
-    immediately before it.
-    """
-    e, v = squash(excerpt), squash(value)
-    if not v:
-        return False
-    start = 0
-    while True:
-        found = e.find(v, start)
-        if found < 0:
-            return False
-        if not _NEGATION.search(e[max(0, found - 4):found]):
-            return True
-        start = found + 1
-
-
 def preference_slot(kind, text, key):
     """Collapse a rephrased setting onto one record.
 
@@ -144,6 +120,9 @@ CREATE TABLE IF NOT EXISTS conv_intents (
 CREATE TABLE IF NOT EXISTS conv_request_keys (
     uid TEXT, request_id TEXT, binding TEXT NOT NULL, PRIMARY KEY(uid,request_id)
 );
+CREATE TABLE IF NOT EXISTS conv_slot_order (
+    uid TEXT, slot TEXT, last_source_order INTEGER NOT NULL, PRIMARY KEY(uid,slot)
+);
 """
 
 
@@ -164,9 +143,64 @@ class MemoryStore:
                 for statement in SCHEMA.split(";"):
                     if statement.strip():
                         db.execute(statement)
+                self._upgrade_sources(db)
         except Exception:
             self.close()
             raise
+
+    def _upgrade_sources(self, db):
+        """One transaction adds a stable input order and reconciles v0 preferences."""
+        if any(r["name"] == "accepted_order" for r in db.execute("PRAGMA table_info(conv_sources)")):
+            return
+        db.execute("ALTER TABLE conv_sources ADD COLUMN accepted_order INTEGER")
+        # Old sources were inserted on final-input acceptance and never replaced.
+        # Old pending grants may stand for a whole utterance. Only a new explicit
+        # grant or a user-confirmed draft may authorize further writes.
+        db.execute("UPDATE conv_sources SET accepted_order=rowid, authorized_text=NULL")
+        db.execute("CREATE UNIQUE INDEX conv_accepted_order ON conv_sources(accepted_order)")
+
+        groups = {}
+        rows = db.execute("""SELECT m.*, s.accepted_order FROM conv_memories m
+            JOIN conv_sources s ON (s.uid,s.sid,s.turn)=(m.uid,m.sid,m.turn)
+            WHERE m.kind='preference' ORDER BY m.updated_at DESC, s.accepted_order DESC, m.rowid DESC""")
+        for row in rows:
+            slot = row["slot"] or preference_slot("preference", row["text"], None)
+            if slot is not None:
+                groups.setdefault((row["uid"], slot), []).append(row)
+        for (uid, slot), records in groups.items():
+            winner = records[0]
+            # Release the old unique index entry before putting a previously
+            # anonymous winner into this slot. Tombstones must not be revived.
+            for older in records[1:]:
+                if older["status"] == "active":
+                    db.execute("""UPDATE conv_memories SET status='superseded',text=''
+                        WHERE uid=? AND id=?""", (uid, older["id"]))
+            db.execute("UPDATE conv_memories SET slot=? WHERE uid=? AND id=?", (slot, uid, winner["id"]))
+            self._mark_slot(db, uid, slot, max(r["accepted_order"] for r in records))
+
+        drafts = db.execute("""SELECT d.*, s.accepted_order FROM conv_drafts d
+            JOIN conv_sources s ON (s.uid,s.sid,s.turn)=(d.uid,d.sid,d.turn)
+            WHERE d.status='pending' AND d.kind='preference' AND d.slot IS NULL""").fetchall()
+        for draft in drafts:
+            slot = preference_slot("preference", draft["text"], None)
+            if slot is None:
+                continue
+            base_id, base_rev = None, None
+            records = groups.get((draft["uid"], slot), [])
+            if records:
+                previous = records[0]
+                if (previous["accepted_order"] < draft["accepted_order"]
+                        and previous["status"] == "active" and previous["source"] != "user_edited"
+                        and (previous["expires_at"] is None or previous["expires_at"] > self.clock())):
+                    base_id, base_rev = previous["id"], previous["revision"]
+            db.execute("""UPDATE conv_drafts SET slot=?,base_id=?,base_rev=?
+                WHERE uid=? AND id=?""", (slot, base_id, base_rev, draft["uid"], draft["id"]))
+
+    @staticmethod
+    def _mark_slot(db, uid, slot, order):
+        db.execute("""INSERT INTO conv_slot_order(uid,slot,last_source_order) VALUES(?,?,?)
+            ON CONFLICT(uid,slot) DO UPDATE SET
+            last_source_order=MAX(last_source_order,excluded.last_source_order)""", (uid, slot, order))
 
     def close(self):
         if self._anchor is not None:
@@ -235,7 +269,9 @@ class MemoryStore:
                             turn, inp, fingerprint, int(save_authorized))):
                     raise conflict("输入或来源回合已绑定其他正文或授权。")
                 return
-            db.execute("INSERT INTO conv_sources VALUES(?,?,?,?,?,?,?)",
+            db.execute("""INSERT INTO conv_sources
+                (uid,sid,turn,input_id,body_hash,authorized,authorized_text,accepted_order)
+                VALUES(?,?,?,?,?,?,?,(SELECT COALESCE(MAX(accepted_order),0)+1 FROM conv_sources))""",
                        (uid, sid, turn, inp, fingerprint, int(save_authorized), grant))
 
     @staticmethod
@@ -273,6 +309,14 @@ class MemoryStore:
             AND (expires_at IS NULL OR expires_at>?)""", (uid, slot, now)).fetchone()
 
     def _commit_record(self, db, uid, sid, turn, kind, value, slot, source, expires, now):
+        if slot is not None:
+            order = db.execute("SELECT accepted_order FROM conv_sources WHERE uid=? AND sid=? AND turn=?",
+                               (uid, sid, turn)).fetchone()["accepted_order"]
+            previous = db.execute("SELECT last_source_order FROM conv_slot_order WHERE uid=? AND slot=?",
+                                  (uid, slot)).fetchone()
+            if previous and order <= previous["last_source_order"]:
+                raise conflict("此偏好已有较新的决定，请按用户最近的要求处理。")
+            self._mark_slot(db, uid, slot, order)
         current = self._slot(db, uid, slot, now)
         if current:
             ident = current["id"]
@@ -345,7 +389,9 @@ class MemoryStore:
         if prior:
             if op == "save" and prior["target"] == "revoked":
                 raise DomainError(403, "SAVE_NOT_AUTHORIZED", "该回合的保存授权已撤回。")
-            if prior["payload_hash"] != fp:
+            legacy_unslotted = (cmd.get("preference_key") is None and slot is not None
+                                and prior["payload_hash"] == digest(kind, value, None, expires))
+            if prior["payload_hash"] != fp and not legacy_unslotted:
                 raise conflict("相同来源和操作的正文发生变化。")
             ident = prior["target"]
             if op == "save":
@@ -361,9 +407,8 @@ class MemoryStore:
         if op == "save":
             # The grant is bound to the verified excerpt, not merely to the round
             # containing "记住", so an explicitly excluded item cannot be stored.
-            # A negation prefix ("不喜欢慢速") must not authorize its opposite.
             if (not src["authorized"] or not src["authorized_text"]
-                    or not grant_covers(src["authorized_text"], value)):
+                    or squash(src["authorized_text"]) != squash(value)):
                 raise DomainError(403, "SAVE_NOT_AUTHORIZED",
                                   "需从正式来源核实保存授权与原文，改写内容请先提交草稿。")
             result = self._commit_record(db, uid, sid, turn, kind, value, slot, "user_authorized", expires, now)
@@ -420,12 +465,10 @@ class MemoryStore:
             raise conflict("偏好在草稿创建后已变更。")
         # Editing the text must not smuggle the draft into another slot: a speed
         # draft rewritten to "打开字幕" would otherwise overwrite the speed record.
-        recomputed = preference_slot(draft["kind"], value, None)
-        if draft["slot"] is not None and recomputed != draft["slot"]:
+        if preference_slot(draft["kind"], draft["text"], None) != preference_slot(draft["kind"], value, None):
             raise invalid("草稿改成了别的偏好类别，请重新提交草稿。")
-        slot = draft["slot"] if recomputed is None else recomputed
         result = self._commit_record(db, uid, draft["sid"], draft["turn"], draft["kind"], value,
-                                     slot, "user_confirmed", draft["expires_at"], now)
+                                     draft["slot"], "user_confirmed", draft["expires_at"], now)
         db.execute("""UPDATE conv_drafts SET status='confirmed',memory_id=?,confirmed_text=?,
             confirmed_rev=? WHERE uid=? AND id=?""",
                    (result["memory_id"], value, result["revision"], uid, did))
@@ -447,6 +490,7 @@ class MemoryStore:
                     AND (base_id=? OR (slot IS NOT NULL AND slot=?) OR (sid=? AND turn=? AND kind=?))""",
                            (uid, mid, row["slot"], row["sid"], row["turn"], row["kind"]))
                 self._revoke_source(db, uid, row["sid"], row["turn"])
+                self._mark_page_edit(db, uid, row["slot"])
             return {"memory_id": mid}, 204
         self._live(row, now)
         rev = cmd.get("expected_revision")
@@ -455,6 +499,16 @@ class MemoryStore:
         if rev != row["revision"]:
             raise DomainError(409, "REVISION_CONFLICT", "记忆已更新，请刷新后重试。")
         value = required(cmd.get("value"), "value")
+        if preference_slot(row["kind"], row["text"], None) != preference_slot(row["kind"], value, None):
+            raise invalid("要改为其他偏好类别，请单独创建并确认该项。")
         db.execute("""UPDATE conv_memories SET text=?,revision=revision+1,source='user_edited',updated_at=?
             WHERE uid=? AND id=? AND revision=?""", (value, now, uid, mid, rev))
+        self._mark_page_edit(db, uid, row["slot"])
         return self._public(self._load(db, uid, mid)), 200
+
+    def _mark_page_edit(self, db, uid, slot):
+        # A user-initiated PATCH/DELETE supersedes every already accepted input
+        # for this slot, including a write which is still queued on another worker.
+        if slot is not None:
+            order = db.execute("SELECT MAX(accepted_order) FROM conv_sources WHERE uid=?", (uid,)).fetchone()[0]
+            self._mark_slot(db, uid, slot, order)

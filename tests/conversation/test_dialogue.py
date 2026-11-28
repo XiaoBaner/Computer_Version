@@ -347,11 +347,52 @@ def test_R13_danger_routes_cover_named_and_unnamed_forms(text, route):
     assert service._route(text, []) == route
 
 
+@pytest.mark.parametrize("utterance", ["我现在要伤害我自己。", "我现在要伤害我的同学。"])
+def test_current_personal_danger_bypasses_remote_generation(sandbox, utterance):
+    calls = []
+    service.configure(store=sandbox, generator=lambda _: calls.append(True), reviewer=lambda *_: True)
+    reply = generated(utterance)
+    assert not calls
+    assert re.search("急救|紧急服务|安全距离", clean_text(reply))
+
+
+@pytest.mark.parametrize("utterance", ["同学跟我说他现在想伤害他自己。", "我不会伤害我的同学。"])
+def test_report_or_denial_does_not_trigger_first_person_emergency(utterance):
+    assert not re.search("立即联系当地|请和对方保持安全距离", clean_text(generated(utterance)))
+
+
+def test_specific_recall_respects_an_open_vocabulary(sandbox):
+    save_from_input(context(), "下次继续练答辩", "follow_up")
+    save_from_input(context(input_id="I2", turn_id="R2"), "下次想聊陶艺", "follow_up")
+    assert "陶艺" in clean_text(generated("你还记得上次说的陶艺话题吗？"))
+    unknown = clean_text(generated("你还记得上次说的远足话题吗？"))
+    assert not re.search("答辩|陶艺", unknown)
+    assert re.search("缺少|不确定|查不到", unknown)
+
+
+@pytest.mark.parametrize("last_day", ["三", "五"])
+def test_recall_uses_latest_committed_user_date_in_session_only(sandbox, last_day):
+    history = [{"role":"user", "text":"汇报安排在周二。"},
+               {"role":"assistant", "text":"好。"},
+               {"role":"user", "text":f"我说错了，汇报改到周{last_day}。"},
+               {"role":"assistant", "text":"好的。"},
+               {"role":"user", "text":"考试改到周日。"}]
+    question = "你记得刚才说的汇报是星期几吗？"
+    answer = clean_text(generated(question, ctx=context(history=history)))
+    assert f"周{last_day}" in answer and not re.search("周日|周二", answer)
+    assert service.list_memories("demo-a") == []
+    assert f"周{last_day}" not in clean_text(generated(question, ctx=context(session_id="new-session")))
+
+
 @pytest.mark.parametrize(("text", "expected"), [
     ("麻烦说慢一点", "slow"),
-    ("你说话太快了", "fast"),
+    ("你说话太快了", "slow"),
+    ("你说话太慢了", "fast"),
+    ("请稍微说快一点", "fast"),
     ("正常速度就好", "normal"),
     ("走路很慢", None),
+    ("我今天走慢一点，想聊聊散步。", None),
+    ("今天训练要求加快步伐", None),
     ("我最近慢热", None),
     ("我很快乐", None),
     ("快考试了", None),

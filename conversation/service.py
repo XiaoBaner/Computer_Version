@@ -222,16 +222,20 @@ def _read_for_reply(ctx):
 
 
 def _speed(text):
-    """Return slow/fast only when the user talks about how the reply should sound.
-
-    "走路很慢"、"慢热"、"快考试了" describe life, not TTS, so plain 慢/快 never
-    match on their own; every pattern needs a speech verb or 语速 nearby.
-    """
-    if re.search(r"正常.{0,2}(语速|速度)|正常[点地]?说|别.{0,2}慢|不用.{0,3}慢|恢复.{0,2}(原速|正常)", text):
+    """Resolve a speech setting or a request about our voice, not unrelated motion."""
+    text = _norm(text).strip("，。！？,.!? ")
+    if re.fullmatch(r"(请|还是|就)?(按|用|恢复)?正常(语速|速度)(说|讲|就行|就好|吧)?", text):
         return "normal"
-    if re.search(r"说快|快.{0,3}说|快一?[点些]|加快|语速.{0,2}快|说得快|太快了|讲快", text):
+    if re.search(r"正常语速|恢复原速|(?:还是按|改回|恢复)正常速度|不用.{0,3}(慢|快)(速|点说)|不喜欢(慢|快)速", text):
+        return "normal"
+    # A complaint about excessive speed asks for the opposite adjustment.
+    if re.search(r"(?:你(?:说话|讲话|说得|讲得)|你的语速)(?:有点|太|过于)快", text):
+        return "slow"
+    if re.search(r"(?:你(?:说话|讲话|说得|讲得)|你的语速)(?:有点|太|过于)慢", text):
         return "fast"
-    if re.search(r"说慢|慢.{0,3}说|慢一?[点些]|放慢|慢速|语速.{0,2}慢|说得慢|讲慢", text):
+    if re.search(r"(?:说|讲|语速)(?:得|再|能不能|可以)?快|快(?:一点|点|一些|些)?(?:儿)?(?:说|讲)|加快语速", text):
+        return "fast"
+    if re.search(r"(?:说|讲|语速)(?:得|再|能不能|可以)?慢|慢(?:一点|点|一些|些)?(?:儿)?(?:说|讲)|放慢语速", text):
         return "slow"
     return None
 
@@ -248,7 +252,9 @@ def _resolved_rate(ctx, text, memories):
     # This optional field is a server-authorized setting. Flask must invalidate
     # a memory-derived background on update/delete, not reuse a bootstrap copy.
     rate = ctx.get("background", {}).get("speech_rate")
-    return "slow" if rate in ("slow", "慢速") else "normal"
+    if rate in ("slow", "慢速"):
+        return "slow"
+    return "fast" if rate in ("fast", "快速") else "normal"
 
 
 #: Numeric mapping for the TTS side. 王皓 must not receive the string "slow";
@@ -308,14 +314,18 @@ def _route(text, history):
         # An example in a film and a current disclosure can occur in one turn.
         if re.search(r"电影(里|中)|小说(里|中)|台词|剧里|课上举例|做研究|翻译", c):
             continue
-        denied = re.search(r"没(有)?(想过?|打算|计划|要)?(去)?(自杀|轻生|自残|伤害|杀人|吞药)|不(会|想|打算)(去)?(自杀|死|轻生|自残|伤害|杀人)|不会去|从来没想", c)
+        denied = re.search(r"没(有)?(想过?|打算|计划|要)?(去)?(自杀|轻生|自残|伤害|杀人|吞药)|不(会|想|打算)(去)?(自杀|死|轻生|自残|伤害|杀人)|从来没想(过)?(自杀|伤害|轻生|自残)", c)
         if denied and not re.search(r"却|反而|控制不住", c):
             continue
         historical = re.search(r"去年|以前|曾经|过去|小时候|几年前|多年前", c)
         overdose = re.search(r"(吞|吃|服).{0,5}(整瓶|一整瓶|一把|一瓶|过量|很多|好多|大量|过多).{0,5}(药|片)|药.{0,4}吃多了|药物过量", c)
-        harm_others = re.search(r"(想|要|打算).{0,4}(杀|砍|伤害|打伤|捅)(人|他|她|别人|同学)|控制不住.{0,4}(伤人|打人)|马上.{0,3}动手", c)
-        harm_self = re.search(r"自杀|寻死|轻生|自残|不想活|想死|结束.{0,3}生命|伤害自己", c)
+        harm_others = re.search(r"(想|要|打算).{0,4}(杀|砍|伤害|打伤|捅)(人|他|她|别人|(?:我的?)?(?:同学|朋友|室友|家人))|控制不住.{0,4}(伤人|打人)", c)
+        harm_self = re.search(r"自杀|寻死|轻生|自残|不想活|想死|结束.{0,3}生命|伤害(?:我)?自己", c)
+        reported = re.search(r"(?:同学|朋友|同事|家人|他|她)(?:跟我|对我)?(?:说|告诉我|提到)", c)
         if historical and (overdose or harm_self or harm_others):
+            safety_check = True
+            continue
+        if reported and not overdose and (harm_self or harm_others):
             safety_check = True
             continue
         if overdose or re.search(
@@ -348,7 +358,9 @@ def _route(text, history):
         return "correction"
     if re.search(r"忘[记掉]|别.{0,4}记住|不用记|删[掉除]|记住|帮我记|替我记|保存.{0,5}偏好|下次.{0,5}(接着|继续)", t):
         return "memory"
-    if re.search(r"你还记得|记得.{0,8}(吗|么)|我上次|上回.{0,6}(说|聊)|我们上次|上次.{0,10}(什么|哪|记)|之前.{0,6}(提|说).{0,5}(什么|谁|哪)", t):
+    if re.search(r"你(?:还)?记得|还记得|记得.{0,8}(吗|么)|我上次|上回.{0,6}(说|聊)|我们上次|上次.{0,10}(什么|哪|记)|之前.{0,6}(提|说).{0,5}(什么|谁|哪)", t):
+        return "recall"
+    if _DAY_QUESTION.search(t) and history and _recalled_weekday(_recall_subject(t), history):
         return "recall"
     if _speed(t):
         return "correction"
@@ -392,7 +404,80 @@ def _corrected_fact(text):
     return ""
 
 
-def _fallback(route, text, memories, readable=True):
+_DAY_QUESTION = re.compile(r"星期几|周几|礼拜几|哪一?天")
+_WEEKDAY = re.compile(r"(?:这|本|下|上)?(?:周|星期|礼拜)[一二三四五六日天]")
+
+
+def _recall_subject(text):
+    """Remove question framing. Unknown subjects remain specific, never wildcards."""
+    query = _norm(text).strip("。！？,.!?，、")
+    query = re.sub(
+        r"^(?:你还记不记得|你?还?记得|我们|咱们|我|跟你|刚才|刚刚|上次|上回|之前|先前|"
+        r"提过的?|提到的?|说过的?|说的|聊过的?|谈过的?|关于|那个|这个|那件|那句|"
+        r"想聊|要练|想练|接着练|接着聊|聊了|说了)+", "", query)
+    return re.sub(r"(?:安排在|安排|日期|时间|定在|是在|是|星期几|礼拜几|周几|哪一?天|"
+                  r"什么|哪件事|的话题|话题|的问题|问题|吗|呢|啊)+$", "", query)
+
+
+def _recalled_weekday(subject, history):
+    """Only quote a weekday from a user statement referring to the requested event."""
+    if not subject:
+        return None
+    last_day = None
+    in_topic = False
+    for turn in history:
+        if turn["role"] != "user":
+            continue
+        body = _norm(turn["text"])
+        if "?" in body or "？" in body:
+            in_topic = False
+            continue
+        for clause in re.split(r"[。！？!?；;]", body):
+            if not clause:
+                continue
+            if subject in clause:
+                in_topic = True
+            elif not (in_topic and re.fullmatch(r"(?:我说错了[,，]?)?(?:不是[^,，]+[,，]是|改到|改成).+", clause)):
+                in_topic = False
+            if in_topic:
+                days = list(_WEEKDAY.finditer(clause))
+                if days:
+                    match = days[-1]
+                    # A bare negation or an unresolved choice establishes no date.
+                    before = clause[:match.start()]
+                    if re.search(r"不是$|还是$|或者$|可能是?$", before):
+                        last_day = None
+                    else:
+                        last_day = match.group()
+                elif re.search(r"取消|待定|没定|改期", clause):
+                    last_day = None
+    return last_day
+
+
+def _recall(text, history, memories, readable):
+    subject = _recall_subject(text)
+    if _DAY_QUESTION.search(text) and subject:
+        day = _recalled_weekday(subject, history)
+        if day:
+            return _reply("reflect", "neutral", f"你刚才说的是{day}。")
+    if not readable:
+        return _reply("clarify", "check_in", "现在暂时读不到保存的记录。", "你想从哪件事接着聊？")
+    for item in memories:
+        value = _norm(item["text"])
+        if subject and subject not in value:
+            continue
+        if item["kind"] == "preference" and _speed(value):
+            return _reply("clarify", "check_in", "目前能查到一条语速偏好。", "你指的是这件事吗？")
+        if item["kind"] == "follow_up":
+            # Quote only a short noun-like subject, never an entire saved utterance.
+            topic = subject or re.sub(r"^(?:下次)?(?:接着|继续|想|要)?(?:练习|聊聊|练|聊)", "", value)
+            topic = topic.strip("。.!！")
+            if re.fullmatch(r"[\u4e00-\u9fffA-Za-z0-9]{2,12}", topic) and _route(topic, []) == "listen":
+                return _reply("clarify", "check_in", f"有一条关于{topic}的待办。", "想从这里接着聊吗？")
+    return _reply("clarify", "check_in", "我缺少能核实这件事的记录。", "你想接着聊哪件事？")
+
+
+def _fallback(route, text, memories, readable=True, history=()):
     """Fixed pre-approved text. Each branch is short, single-purpose and safe."""
     if route in SAFETY_ROUTES:
         entry = _config().policy["safety"][route]
@@ -410,20 +495,7 @@ def _fallback(route, text, memories, readable=True):
             return _reply("reflect", "neutral", f"好，是{fact}。")
         return _reply("reflect", "neutral", "谢谢你纠正我，接下来按你刚说的来。")
     if route == "recall":
-        if not readable:
-            return _reply("clarify", "check_in", "现在暂时读不到保存的记录。", "你想从哪件事接着聊？")
-        # A generic question can bring up an open task. A specific subject
-        # must match an effective record or the answer remains "unknown".
-        subject = re.findall(r"睡眠|失眠|语速|开场|答辩|汇报|工作|学习|考试|家庭|父母|情绪|朋友", text)
-        relevant = [m for m in memories if not subject or any(s in m["text"] for s in subject)]
-        for item in relevant:
-            if item["kind"] == "follow_up":
-                for topic in ("开场", "答辩", "汇报"):
-                    if topic in item["text"]:
-                        return _reply("clarify", "check_in", f"有一条关于{topic}的待办。", "想从这里接着练吗？")
-        if any(m["kind"] == "preference" and _speed(m["text"]) for m in relevant):
-            return _reply("clarify", "check_in", "目前能查到一条语速偏好。", "你指的是这件事吗？")
-        return _reply("clarify", "check_in", "我缺少能核实这件事的记录。", "你想接着聊哪件事？")
+        return _recall(text, history, memories, readable)
     if route == "memory":
         return _reply("listen", "neutral", "好，保存或撤回的结果以记忆列表为准。")
     if route == "quiet":
@@ -496,7 +568,7 @@ def _gate(reply, policy):
     diagnosis-bearing fallback would have gone straight to captions and TTS.
     """
     if _invalid_candidate(reply, policy) or _hard_violation(reply):
-        logger.error("预审/动态短句未通过出口校验，已退回通用句：%r", reply.get("sentences"))
+        logger.error("预审/动态短句未通过出口校验，已退回通用句")
         return _reply("listen", "gentle", "我在听。", "你愿意再说一点吗？")
     return reply
 
@@ -545,7 +617,7 @@ def respond(ctx, text: str, cancelled) -> ApprovedReply:
     # delay time-sensitive language. Exact retrieval is similarly deterministic.
     needs_memories = route in ("listen", "practice", "clarify", "recall")
     memories, readable = _read_for_reply(ctx) if needs_memories else ([], True)
-    fallback = _fallback(route, text, memories, readable)
+    fallback = _fallback(route, text, memories, readable, history)
     outcome, reason = fallback, route
     if route in ("listen", "practice", "clarify"):
         context = {"text": text, "route": route, "history": history,

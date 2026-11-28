@@ -1,5 +1,6 @@
 """Synthetic identities only. Every test uses a real, private temporary SQLite file."""
 from concurrent.futures import ThreadPoolExecutor
+import sqlite3
 from threading import Barrier
 
 import pytest
@@ -282,3 +283,88 @@ def test_M20_authorized_excerpt_comes_from_the_round_and_needs_a_grant(store):
     fail(400, lambda: store.record_source(A, SESSION, "R3", "asr-3", "记住，语速慢一点",
                                           save_authorized=1))
     assert store.list_memories(A) == []
+
+
+def test_only_the_complete_normalized_grant_can_be_saved(store):
+    qualified = "仅在练习 Ａ 环节时用慢语速"
+    source(store, value=qualified)
+    fail(403, lambda: store.apply_memory(A, from_source("save", value="慢语速", kind="preference")))
+    saved = store.apply_memory(A, from_source("save", value="仅在练习A环节时用慢语速", kind="preference"))
+    assert store.list_memories(A) == [saved]
+
+
+@pytest.mark.parametrize("latest_action", ["save", "delete", "update"])
+def test_late_first_save_cannot_reverse_a_newer_preference(path, latest_action):
+    # A constant clock and descending turn labels exercise source acceptance
+    # order rather than wall time, lexicographic turn IDs or worker scheduling.
+    db = MemoryStore(path, clock=lambda: 1000)
+    source(db, value="语速慢一点", number=88)
+    source(db, value="正常语速", number=2)
+    recent = db.apply_memory(A, from_source("save", 2, "正常语速", "preference"))
+    expected = [recent]
+    if latest_action == "delete":
+        db.apply_memory(A, dict(op="delete", memory_id=recent["memory_id"], request_id="rm"))
+        expected = []
+    elif latest_action == "update":
+        updated = db.apply_memory(A, dict(op="update", memory_id=recent["memory_id"], request_id="edit",
+                                          expected_revision=1, value="加快语速"))
+        expected = [updated]
+    db.close()
+    reopened = MemoryStore(path)
+    fail(409, lambda: reopened.apply_memory(A, from_source("save", 88, "语速慢一点", "preference")))
+    assert reopened.list_memories(A) == expected
+    reopened.close()
+
+
+def test_page_edit_supersedes_an_already_accepted_but_uncommitted_input(store):
+    source(store, value="慢语速")
+    saved = store.apply_memory(A, from_source("save", value="慢语速", kind="preference"))
+    source(store, value="快语速", number=2)
+    updated = store.apply_memory(A, dict(op="update", memory_id=saved["memory_id"], request_id="edit",
+                                         expected_revision=1, value="正常语速"))
+    fail(409, lambda: store.apply_memory(A, from_source("save", 2, "快语速", "preference")))
+    assert store.list_memories(A) == [updated]
+
+
+def test_cross_slot_patch_preserves_both_preferences(store):
+    for n, value in [(1, "打开字幕"), (2, "语速慢一点")]:
+        source(store, value=value, number=n)
+        store.apply_memory(A, from_source("save", n, value, "preference"))
+    before = store.list_memories(A)
+    speed = next(m for m in before if m["text"] == "语速慢一点")
+    fail(400, lambda: store.apply_memory(A, dict(op="update", request_id="different-slot",
+        memory_id=speed["memory_id"], value="关闭字幕", expected_revision=1)))
+    assert store.list_memories(A) == before
+
+
+def test_migration_resolves_duplicate_slots_and_keeps_unrelated_confirmed_records(path):
+    # Recreate the v0 tables whose persisted layout/data this migration reads.
+    # In v0 an explicit preference_key could coexist with another same-kind
+    # record where the address slot had not yet been inferred.
+    with sqlite3.connect(path) as legacy:
+        legacy.executescript("""
+            CREATE TABLE conv_sources (
+                uid TEXT, sid TEXT, turn TEXT, input_id TEXT NOT NULL, body_hash TEXT NOT NULL,
+                authorized INTEGER NOT NULL, authorized_text TEXT, PRIMARY KEY(uid,sid,turn),
+                UNIQUE(uid,sid,input_id));
+            CREATE TABLE conv_memories (
+                uid TEXT, id TEXT, kind TEXT NOT NULL, text TEXT NOT NULL, revision INTEGER NOT NULL,
+                source TEXT NOT NULL, sid TEXT NOT NULL, turn TEXT NOT NULL, slot TEXT,
+                status TEXT NOT NULL, updated_at REAL NOT NULL, expires_at REAL, PRIMARY KEY(uid,id));
+            CREATE UNIQUE INDEX conv_live_slot ON conv_memories(uid,slot)
+                WHERE status='active' AND slot IS NOT NULL;
+        """)
+        for n, value, slot in [(1, "叫我老陈", "address_name"), (2, "叫我小陈", None),
+                               (3, "下次练结尾", None)]:
+            legacy.execute("INSERT INTO conv_sources VALUES(?,?,?,?,?,1,NULL)",
+                           (A, SESSION, f"R{n}", f"I{n}", f"digest-{n}"))
+            kind = "follow_up" if n == 3 else "preference"
+            legacy.execute("INSERT INTO conv_memories VALUES(?,?,?,?,1,'user_confirmed',?,?,?,'active',?,NULL)",
+                           (A, f"M{n}", kind, value, SESSION, f"R{n}", slot, n))
+    db = MemoryStore(path)
+    assert {m["memory_id"] for m in db.list_memories(A)} == {"M2", "M3"}
+    source(db, number=4, value="叫我陈老师")
+    saved = db.apply_memory(A, from_source("save", 4, "叫我陈老师", "preference"))
+    assert saved == dict(memory_id="M2", kind="preference", text="叫我陈老师", revision=2)
+    db.close()
+    assert {m["text"] for m in MemoryStore(path).list_memories(A)} == {"叫我陈老师", "下次练结尾"}

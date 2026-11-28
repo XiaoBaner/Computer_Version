@@ -106,13 +106,15 @@ def main() -> int:
             _check("B 不能删 A 的记录", error.status == 404)
         _check("B 的列表为空", service.list_memories("demo-b") == [])
 
-        print("⑨ 撤回：列表立即为空，下一轮不再召回")
+        print("⑨ 撤回语速设置：重开后列表仍为空")
         service.apply_memory("demo-a", {"op": "delete", "memory_id": changed["memory_id"],
                                         "request_id": "demo-del-1"})
         _check("撤回后列表为空", service.list_memories("demo-a") == [])
-        recall = service.respond(_ctx("demo-a", "S3", "R1", "I9"), "你还记得我上次要练什么吗？", lambda: False)
-        print(f"  台词: {_say(recall)}")
-        _check("撤回后不召回", "答辩" not in _say(recall))
+        store.close()
+        store = MemoryStore(db)
+        service.configure(store=store)
+        _check("重开后仍无该设置", service.list_memories("demo-a") == [])
+        _check("回到默认语速倍率", service.speech_rate_factor(_ctx("demo-a", "S3", "R0", None)) == 1.0)
 
         print("⑩ 取消：抛 TurnCancelled，不交付任何文字")
         try:
@@ -146,6 +148,8 @@ def main() -> int:
             "source_turn_id": "R1", "request_id": "demo-confirm"})
         service.apply_memory("demo-a", {"op": "delete", "memory_id": record["memory_id"],
                                         "request_id": "demo-delete-2"})
+        latest = service.respond(_ctx("demo-a", "S6", "R2", "I2"), "你还记得上次要练什么吗？", lambda: False)
+        _check("已撤回的跟进事项退出召回", "答辩" not in _say(latest))
         try:
             service.apply_memory("demo-a", {
                 "op": "save", "kind": "follow_up", "value": "下次练答辩", "session_id": "S6",

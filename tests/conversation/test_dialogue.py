@@ -507,9 +507,14 @@ def test_R17_recall_answers_question_variants_instead_of_denying(tmp_path):
         service.apply_memory(second["user_id"], {
             "op": "save", "kind": "follow_up", "value": "下次练答辩",
             "session_id": "session-1", "source_turn_id": "R2", "request_id": "recall-todo"})
-        for question in ("记得我上次要练什么吗？", "记得我上次要练的是什么吗？", "上次练什么？"):
+        for question in ("记得我上次要练什么吗？", "记得我上次要练的是什么吗？", "上次练什么？",
+                         "上次要做什么？", "上回打算做什么呢？"):
             answer = " ".join(service.respond(context(turn_id="R3"), question, lambda: False)["sentences"])
             assert "答辩" in answer and "缺少" not in answer, (question, answer)
+        unknown = " ".join(service.respond(context(turn_id="R3"), "上次喝什么？", lambda: False)["sentences"])
+        assert "答辩" not in unknown and "记录" in unknown
+        broad = " ".join(service.respond(context(turn_id="R3"), "你还记得吗？", lambda: False)["sentences"])
+        assert "答辩" not in broad and "哪件事" in broad
         pref = " ".join(service.respond(context(turn_id="R4"), "我的语速偏好是什么？",
                                         lambda: False)["sentences"])
         assert "语速偏好" in pref, pref
@@ -628,4 +633,5 @@ def test_caption_setting_cannot_fall_back_to_unrelated_speech_preference():
     assert "语速" not in clean_text(generated(question))
     save_from_input(context(turn_id="R2", input_id="I2"), "关闭字幕", "preference")
     assert "关闭字幕" in clean_text(generated(question))
+    assert "关闭字幕" in clean_text(generated("我的字幕设置"))
     assert "慢速" in clean_text(generated("我的语速偏好是什么？"))

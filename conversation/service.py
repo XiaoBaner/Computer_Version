@@ -412,9 +412,9 @@ def _route(text, history):
         return "correction"
     if re.search(r"忘[记掉]|别.{0,4}记住|不用记|删[掉除]|记住|帮我记|替我记|保存.{0,5}偏好|下次.{0,5}(接着|继续)", t):
         return "memory"
-    if re.search(r"你(?:还)?记得|还记得|记得.{0,8}(吗|么)|我上次|上回.{0,6}(说|聊)|我们上次|上次.{0,10}(什么|哪|记)|之前.{0,6}(提|说).{0,5}(什么|谁|哪)", t):
+    if _OPEN_FOLLOW_UP.fullmatch(t.rstrip("。?!")) or re.search(r"你(?:还)?记得|还记得|记得.{0,8}(吗|么)|我上次|上回.{0,6}(说|聊)|我们上次|上次.{0,10}(什么|哪|记)|之前.{0,6}(提|说).{0,5}(什么|谁|哪)", t):
         return "recall"
-    if re.search(r"(?:我的?)?(?:语速|声音|偏好|设置)(?:是什么|是啥|有哪些|怎么样|吗|呢)", t):
+    if _caption_query(t) or re.search(r"(?:我的?)?(?:语速|声音|偏好)(?:是什么|是啥|有哪些|怎么样|吗|呢)", t):
         return "recall"
     if _DAY_QUESTION.search(t) and history and _recalled_weekday(_recall_subject(t), history):
         return "recall"
@@ -488,11 +488,24 @@ def _corrected_fact(text):
 
 _DAY_QUESTION = re.compile(r"星期几|周几|礼拜几|哪一?天")
 _WEEKDAY = re.compile(r"(?:这|本|下|上)?(?:周|星期|礼拜)[一二三四五六日天]")
+_OPEN_FOLLOW_UP = re.compile(
+    r"(?:你(?:还)?记得)?(?:我|我们|咱们)?(?:上次|上回|之前)(?:说的)?"
+    r"(?:要|想|打算|准备|该)(?:继续)?做(?:什么|啥|哪件事)(?:吗|呢|来着)?"
+)
+
+
+def _caption_query(text):
+    query = _norm(text).strip("。!?")
+    return bool(re.fullmatch(
+        r"(?:我的?)?字幕(?:(?:设置|开关|偏好)(?:是什么|是啥|怎么样|吗|呢)?|"
+        r"开着还是关着|是开还是关|怎么设置|如何设置)", query))
 
 
 def _recall_subject(text):
     """Remove question framing. Unknown subjects remain specific, never wildcards."""
     query = _norm(text).strip("。！？,.!?，、")
+    if _OPEN_FOLLOW_UP.fullmatch(query):
+        return ""
     query = re.sub(
         r"^(?:你还记不记得|你?还?记得|我们|咱们|我|跟你|刚才|刚刚|上次|上回|之前|先前|"
         r"提过的?|提到的?|说过的?|说的|聊过的?|谈过的?|关于|那个|这个|那件|那句|"
@@ -539,7 +552,9 @@ def _recalled_weekday(subject, history):
 
 
 def _recall(text, history, memories, readable):
-    subject = _recall_subject(text)
+    subject = "字幕" if _caption_query(text) else _recall_subject(text)
+    if not subject and not re.search(r"待办|安排|计划|上次.{0,10}(?:要|想|练|聊|做|打算)", _norm(text)) and not _OPEN_FOLLOW_UP.fullmatch(_norm(text).rstrip("。?!")):
+        return _reply("clarify", "check_in", "你想问我记不记得哪件事？")
     if _DAY_QUESTION.search(text) and subject:
         day = _recalled_weekday(subject, history)
         if day:
@@ -562,7 +577,10 @@ def _recall(text, history, memories, readable):
                 return _reply("reflect", "neutral", "你保存的偏好是开启字幕。")
             if re.fullmatch(r"(?:关闭|关掉|隐藏)字幕|字幕(?:关闭|关掉|隐藏)", value):
                 return _reply("reflect", "neutral", "你保存的偏好是关闭字幕。")
+        return _reply("clarify", "check_in", "你想开着还是关掉字幕？")
     for item in memories:
+        if not subject and item["kind"] != "follow_up":
+            continue
         value = _norm(item["text"])
         if subject and subject not in value:
             continue
@@ -698,6 +716,7 @@ def _candidate_result(runtime, context, fallback, cancelled):
     except TurnCancelled:
         raise
     except Exception:
+        _checkpoint(cancelled)
         return fallback, "provider_failure"
 
 

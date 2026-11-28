@@ -73,6 +73,8 @@ Flask 从已认证用户的正式输入中识别授权，绑定到 `session_id`�
 
 同一来源回合内，同一操作携带不同事项重试会返回 409。第二件事通过新授权或有效草稿确认。内置偏好类别为 `voice_speed`、`address_name`、`language`、`sentence_length`、`subtitle`。自定义偏好需要连续改口并替换同一条记录时，由服务端传稳定的 `preference_key`。
 
+撤回以后，同一身份、类型和完整事项的旧保存、提议或草稿确认返回 409，已无法访问的记录可返回 404。用户撤回后重新给出明确授权，可以保存。旧库升级时以仍有效的记录为准，重复的历史偏好退出召回并保留原文；若恢复的数据库包含冲突的来源顺序，启动返回 503 `MEMORY_MIGRATION_CONFLICT`，由维护者核对备份。
+
 ## 实机联调前准备三项
 
 1. **话术核准。** 由团队负责人核准现场危机话术与联系方式，在 `conversation/policy.yml` 的 `safety.approval` 登记核准人和日期，再核对 `service.health()["crisis_text_approved"]`。

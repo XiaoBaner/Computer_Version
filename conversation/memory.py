@@ -170,7 +170,11 @@ class MemoryStore:
     def _upgrade_sources(self, db):
         """One transaction adds a stable input order and reconciles v0 preferences."""
         if any(r["name"] == "accepted_order" for r in db.execute("PRAGMA table_info(conv_sources)")):
-            db.execute("CREATE UNIQUE INDEX IF NOT EXISTS conv_accepted_order ON conv_sources(accepted_order)")
+            try:
+                db.execute("CREATE UNIQUE INDEX IF NOT EXISTS conv_accepted_order ON conv_sources(accepted_order)")
+            except sqlite3.IntegrityError as exc:
+                raise DomainError(503, "MEMORY_MIGRATION_CONFLICT",
+                                  "记忆库存在重复的来源顺序，需从备份恢复或由维护者处理。") from exc
             return
         db.execute("ALTER TABLE conv_sources ADD COLUMN accepted_order INTEGER")
         # Old sources were inserted on final-input acceptance and never replaced.
@@ -195,7 +199,7 @@ class MemoryStore:
             # ID. Release the old unique index entry before assigning its slot.
             for older in records[1:]:
                 if older["status"] == "active":
-                    db.execute("""UPDATE conv_memories SET status='superseded',text=''
+                    db.execute("""UPDATE conv_memories SET status='superseded'
                         WHERE uid=? AND id=?""", (uid, older["id"]))
             db.execute("UPDATE conv_memories SET slot=? WHERE uid=? AND id=?", (slot, uid, winner["id"]))
             self._mark_slot(db, uid, slot, max(r["accepted_order"] for r in records))
@@ -519,9 +523,8 @@ class MemoryStore:
         mid = row["id"]
         if op == "delete":
             if row["status"] != "deleted":
-                # An owner may withdraw a retained, time-expired row. A
-                # compacted/superseded row has no actionable item left.
-                if row["status"] != "active":
+                # An owner can erase a retained expired or superseded item by ID.
+                if row["status"] not in {"active", "superseded"}:
                     raise missing()
                 # An earlier matching grant may still be queued in another
                 # session. Only mark sources accepted through this withdrawal.
@@ -538,9 +541,11 @@ class MemoryStore:
                 # by confirming a draft which was pending at deletion time.
                 db.execute("""UPDATE conv_drafts SET status='discarded',text='' WHERE uid=? AND status='pending'
                     AND (base_id=? OR (slot IS NOT NULL AND slot=?) OR (sid=? AND turn=? AND kind=?))""",
-                           (uid, mid, row["slot"], row["sid"], row["turn"], row["kind"]))
+                           (uid, mid, row["slot"] if row["status"] == "active" else None,
+                            row["sid"], row["turn"], row["kind"]))
                 self._revoke_source(db, uid, row["sid"], row["turn"])
-                self._mark_page_edit(db, uid, row["slot"])
+                if row["status"] == "active":
+                    self._mark_page_edit(db, uid, row["slot"])
             return {"memory_id": mid}, 204
         self._live(row, now)
         rev = cmd.get("expected_revision")

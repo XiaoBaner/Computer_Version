@@ -387,6 +387,9 @@ def test_migration_resolves_duplicate_slots_and_keeps_unrelated_confirmed_record
             legacy.execute("UPDATE conv_memories SET status='deleted',text='',updated_at=4 WHERE id='M1'")
     db = MemoryStore(path)
     assert {m["memory_id"] for m in db.list_memories(A)} == {"M2", "M3"}
+    with sqlite3.connect(path) as migrated:
+        old = migrated.execute("SELECT status,text FROM conv_memories WHERE uid=? AND id='M1'", (A,)).fetchone()
+        assert old == (("deleted", "") if deleted_old_id else ("superseded", "叫我老陈"))
     source(db, number=4, value="叫我陈老师")
     saved = db.apply_memory(A, from_source("save", 4, "叫我陈老师", "preference"))
     assert saved == dict(memory_id="M2", kind="preference", text="叫我陈老师", revision=2)
@@ -453,6 +456,8 @@ def test_failed_withdrawal_does_not_block_other_pending_sources(path, store):
     reopened = MemoryStore(path)
     assert reopened.list_memories(A) == [saved]
     assert reopened.apply_memory(A, from_source("save", 1))["text"] == WISH
+
+
 def test_source_order_index_is_repaired_on_reopen(tmp_path):
     path = tmp_path / "partially-restored.sqlite"
     with sqlite3.connect(path) as db:
@@ -466,3 +471,19 @@ def test_source_order_index_is_repaired_on_reopen(tmp_path):
         names = {row[1]: row[2] for row in db.execute("PRAGMA index_list(conv_sources)")}
         assert names["conv_accepted_order"] == 1
         assert db.execute("SELECT accepted_order FROM conv_sources").fetchall() == [(1,)]
+
+
+def test_source_order_conflict_fails_without_rewriting_restored_data(tmp_path):
+    path = tmp_path / "ambiguous-restored.sqlite"
+    store = MemoryStore(path)
+    source(store, number=1)
+    source(store, number=2)
+    store.close()
+    with sqlite3.connect(path) as db:
+        db.execute("DROP INDEX conv_accepted_order")
+        db.execute("UPDATE conv_sources SET accepted_order=1")
+    with pytest.raises(DomainError) as rejected:
+        MemoryStore(path)
+    assert rejected.value.status == 503 and rejected.value.code == "MEMORY_MIGRATION_CONFLICT"
+    with sqlite3.connect(path) as db:
+        assert db.execute("SELECT accepted_order FROM conv_sources ORDER BY rowid").fetchall() == [(1,), (1,)]

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import logging
 from pathlib import Path
 import re
 import threading
@@ -49,6 +50,11 @@ class _Runtime:
     review: Callable | None
     on_decision: Callable | None
     policy: dict
+    #: False only when ``configure()`` was never called with a store: replies keep
+    #: working, but memory I/O is refused instead of silently vanishing on restart.
+    #: An explicitly injected stand-in (offline demo) is a deliberate choice and
+    #: therefore allowed.
+    memory_ready: bool
 
 
 #: Route names the deterministic policy can return. Kept in one place so the
@@ -57,30 +63,82 @@ ROUTES = ("urgent", "urgent_medical", "urgent_others", "safety_check", "medicati
           "diagnosis", "correction", "memory", "recall", "quiet", "suspicion",
           "boundary", "clarify", "practice", "listen")
 
+#: Wording that must be reviewed by the team, so it lives in ``policy.yml``
+#: instead of this file. Editing a crisis sentence must not require a code change.
+SAFETY_ROUTES = ("urgent", "urgent_medical", "urgent_others", "safety_check",
+                 "medication", "diagnosis", "suspicion", "boundary")
+
+#: A pre-approved sentence containing any of these is refused at startup, which
+#: turns "someone edited the policy file" into a loud failure instead of a silent
+#: boundary leak. Only unambiguous instructions are listed: "不要自行停药" is a
+#: correct sentence and must not be rejected for containing 停药.
+FORBIDDEN_SAFETY_WORDS = ("建议购买", "可以吃", "加一片", "保证没事",
+                          "你患有", "确诊为", "继续练")
+
 _runtime = None
 _config_lock = threading.RLock()
+logger = logging.getLogger(__name__)
+
+
+def _validate_policy(policy):
+    """Fail fast on a malformed rule file; also called directly by tests."""
+    if policy.get("version") != "weekend-v1":
+        raise ValueError("不支持的对话规则版本")
+    if set(policy.get("intents", ())) != {"listen", "reflect", "clarify", "offer_option", "practice"}:
+        raise ValueError("intent 配置与协议不一致")
+    if set(policy.get("voice_styles", ())) != {"neutral", "gentle", "practice", "check_in"}:
+        raise ValueError("voice_style 配置与协议不一致")
+    if not (1 <= policy.get("max_sentences", 0) <= 2
+            and policy.get("max_clarifications") == 1
+            and 1 <= policy.get("max_chars_per_sentence", 0) <= 200):
+        raise ValueError("规则长度与短句协议不一致")
+    if set(policy.get("routes", ())) != set(ROUTES):
+        raise ValueError("路由配置与分词规则不一致")
+    if not policy.get("checks") or not policy.get("priorities"):
+        raise ValueError("检查项与优先级必须在规则文件中声明")
+    safety = policy.get("safety")
+    if not isinstance(safety, dict):
+        raise ValueError("规则文件缺少 safety 段：危机与用药话术必须版本化")
+    for route in SAFETY_ROUTES:
+        entry = safety.get(route)
+        if not isinstance(entry, dict):
+            raise ValueError(f"safety 缺少 {route}")
+        if entry.get("intent") not in policy["intents"] or entry.get("voice_style") not in policy["voice_styles"]:
+            raise ValueError(f"safety[{route}] 的枚举不合法")
+        sentences = entry.get("sentences")
+        if (not isinstance(sentences, list) or not 1 <= len(sentences) <= policy["max_sentences"]
+                or any(not isinstance(s, str) or not s.strip() for s in sentences)):
+            raise ValueError(f"safety[{route}] 缺少合法短句")
+        for sentence in sentences:
+            if len(sentence) > policy["max_chars_per_sentence"]:
+                raise ValueError(f"safety[{route}] 超出单句长度")
+            if any(word in sentence for word in FORBIDDEN_SAFETY_WORDS):
+                raise ValueError(f"safety[{route}] 含越界措辞")
+
+
+def health() -> dict:
+    """Small handoff probe: is the crisis wording actually approved yet?"""
+    runtime = _config()
+    approval = runtime.policy["safety"].get("approval", {})
+    return {"policy_version": runtime.policy["version"],
+            "crisis_text_approved": bool(approval.get("by") and approval.get("on")),
+            "memory_ready": runtime.memory_ready}
 
 
 def configure(*, store=None, generator=None, reviewer=None, on_decision=None):
     """Startup or explicit test reset. Caller owns the lifecycle of injected stores."""
     global _runtime
     policy = json.loads(Path(__file__).with_name("policy.yml").read_text(encoding="utf-8"))
-    if policy["version"] != "weekend-v1":
-        raise ValueError("不支持的对话规则版本")
-    if set(policy["intents"]) != {"listen", "reflect", "clarify", "offer_option", "practice"}:
-        raise ValueError("intent 配置与协议不一致")
-    if set(policy["voice_styles"]) != {"neutral", "gentle", "practice", "check_in"}:
-        raise ValueError("voice_style 配置与协议不一致")
-    if not (1 <= policy["max_sentences"] <= 2 and policy["max_clarifications"] == 1
-            and 1 <= policy["max_chars_per_sentence"] <= 200):
-        raise ValueError("规则长度与短句协议不一致")
-    if set(policy["routes"]) != set(ROUTES):
-        raise ValueError("路由配置与分词规则不一致")
+    _validate_policy(policy)
+    approval = policy["safety"].get("approval", {})
+    if not (approval.get("by") and approval.get("on")):
+        logger.warning("危机话术尚未经团队核准（policy.yml safety.approval）：现场启用前必须替换。")
+    memory_ready = store is not None
     if store is None:
         from .fixture_memory import DictMemoryStore
         store = DictMemoryStore()
     with _config_lock:
-        _runtime = _Runtime(store, generator, reviewer, on_decision, policy)
+        _runtime = _Runtime(store, generator, reviewer, on_decision, policy, memory_ready)
 
 
 def _config():
@@ -116,17 +174,26 @@ def _check_ctx(ctx, *, require_input):
         raise DomainError(400, "INVALID_ARGUMENT", "背景或已呈现历史格式错误。")
 
 
+def _durable_store():
+    """Refuse memory I/O when no store was injected at all."""
+    runtime = _config()
+    if not runtime.memory_ready:
+        raise DomainError(503, "MEMORY_UNAVAILABLE",
+                          "服务端未注入记忆库（configure(store=...)），记忆不可读写。")
+    return runtime.store
+
+
 def list_memories(user_id: str) -> list[dict]:
-    return _config().store.list_memories(user_id)
+    return _durable_store().list_memories(user_id)
 
 
 def apply_memory(user_id: str, cmd: dict) -> dict:
-    return _config().store.apply_memory(user_id, cmd)
+    return _durable_store().apply_memory(user_id, cmd)
 
 
 def apply_memory_with_status(user_id: str, cmd: dict):
     """HTTP adapter convenience; repeated identical confirm needs a distinct status."""
-    return _config().store.apply_memory_with_status(user_id, cmd)
+    return _durable_store().apply_memory_with_status(user_id, cmd)
 
 
 def record_source(ctx, text, *, save_authorized=False, authorized_text=None):
@@ -150,13 +217,21 @@ def _read_for_reply(ctx):
     except DomainError as exc:
         if exc.status != 503:
             raise
+        logger.warning("记忆库暂不可用，本轮按“读不到”处理：%s", exc.message)
         return [], False
 
 
 def _speed(text):
+    """Return slow/fast only when the user talks about how the reply should sound.
+
+    "走路很慢"、"慢热"、"快考试了" describe life, not TTS, so plain 慢/快 never
+    match on their own; every pattern needs a speech verb or 语速 nearby.
+    """
     if re.search(r"正常.{0,2}(语速|速度)|正常[点地]?说|别.{0,2}慢|不用.{0,3}慢|恢复.{0,2}(原速|正常)", text):
         return "normal"
-    if re.search(r"说慢|慢.{0,3}说|慢一?[点些]|放慢|慢速", text):
+    if re.search(r"说快|快.{0,3}说|快一?[点些]|加快|语速.{0,2}快|说得快|太快了|讲快", text):
+        return "fast"
+    if re.search(r"说慢|慢.{0,3}说|慢一?[点些]|放慢|慢速|语速.{0,2}慢|说得慢|讲慢", text):
         return "slow"
     return None
 
@@ -176,6 +251,11 @@ def _resolved_rate(ctx, text, memories):
     return "slow" if rate in ("slow", "慢速") else "normal"
 
 
+#: Numeric mapping for the TTS side. 王皓 must not receive the string "slow";
+#: Flask passes the factor from here so the multiplier lives in one reviewed place.
+SPEECH_RATE_FACTORS = {"slow": 0.85, "normal": 1.0, "fast": 1.15}
+
+
 def speech_rate(ctx, text=""):
     """Internal TTS setting, separate from the four legal voice_style values."""
     _check_ctx(ctx, require_input=False)
@@ -183,11 +263,20 @@ def speech_rate(ctx, text=""):
     return _resolved_rate(ctx, text, memories)
 
 
+def speech_rate_factor(ctx, text=""):
+    """``0.85`` / ``1.0`` / ``1.15`` for ``voice.tts.synthesize``."""
+    return SPEECH_RATE_FACTORS[speech_rate(ctx, text)]
+
+
 def opening(ctx) -> ApprovedReply:
-    """Welcome turn. ``input_id`` is None and R0 can never be a memory source."""
+    """Welcome turn. ``input_id`` is None and R0 can never be a memory source.
+
+    Voice style stays ``neutral``: a confirmed slow preference reaches the speaker
+    only through :func:`speech_rate`. Merging the two would make 王皓 slow the
+    audio twice and would hide which knob the user actually asked for.
+    """
     _check_ctx(ctx, require_input=False)
-    style = "gentle" if speech_rate(ctx) == "slow" else "neutral"
-    return _reply("listen", style, "你好。", "今天想从哪件事聊起？")
+    return _reply("listen", "neutral", "你好。", "今天想从哪件事聊起？")
 
 
 def _norm(text):
@@ -229,12 +318,18 @@ def _route(text, history):
         if historical and (overdose or harm_self or harm_others):
             safety_check = True
             continue
-        if overdose or re.search(r"我(刚刚|已经|刚).{0,3}(割伤|刺伤|弄伤)自己", c):
+        if overdose or re.search(
+                r"(我|自己).{0,4}(割伤|划伤|烫伤|弄伤|刺伤)(了)?.{0,4}(自己|手臂|手腕|腿|胳膊|脚)"
+                r"|我(刚刚|已经|刚|自己).{0,3}(割伤|刺伤|弄伤|划伤)", c):
             return "urgent_medical"
         if harm_others:
             return "urgent_others"
+        # "我准备今晚动手" names no method; asking for details would be the wrong
+        # first move, so it is treated as an acute risk. "动手写论文" is excluded.
+        if re.search(r"(准备|打算|计划|想|要).{0,4}动手(?!.{0,6}(写|做|改|修|搬|收|干|学|练|吃))", c):
+            return "urgent" if re.search(r"现在|今晚|今天|马上|立刻|待会|一会儿|明天", c) else "safety_check"
         if harm_self:
-            if re.search(r"现在|马上|正在|立刻|要去|动手|准备|已经|打算", c):
+            if re.search(r"现在|马上|正在|立刻|要去|动手|准备|已经|打算|控制不住|忍不住|停不下来", c):
                 return "urgent"
             safety_check = True
         if (safety_check or recent_risk_context) and re.search(r"(我|现在|马上).{0,6}(准备动手|要动手|打算行动)", c):
@@ -272,28 +367,47 @@ def _route(text, history):
     return "listen"
 
 
+def _corrected_fact(text):
+    """The replacement fact the user just supplied, if it can be read safely.
+
+    "我说错了，不是周四，是周五。" must answer with 周五; a generic "谢谢你纠正"
+    would let the old fact stand. Extraction stays conservative: only a plain
+    "不是X，是Y" / "改成Y" shape qualifies, and hedged or causal Y is rejected.
+    A fact that names an illness, a drug or a URL is refused outright — echoing
+    "不是抑郁症，是焦虑症" would make the module say a diagnosis out loud.
+    """
+    t = _norm(text)
+    for pattern, group in (
+            (r"不是(.{1,20}?)[，,、]\s*(?:而)?是(.{1,16})", 2),
+            (r"(?:改成|改到|应该是|其实是|应该是说)(.{1,16})", 1)):
+        match = re.search(pattern, t)
+        if not match:
+            continue
+        fact = match.group(group).strip("。！？，、,.!? ")
+        if not fact or re.search(r"因为|所以|如果|要是|什么|哪个", fact):
+            continue
+        if re.search(r"抑郁|焦虑症|双相|精神分裂|人格障碍|强迫|确诊|处方|剂量|毫克|片|自杀|自残|http|www", fact):
+            continue
+        return fact
+    return ""
+
+
 def _fallback(route, text, memories, readable=True):
     """Fixed pre-approved text. Each branch is short, single-purpose and safe."""
-    if route == "urgent_medical":
-        return _reply("offer_option", "check_in", "请立即联系当地急救。", "如果有人能安全地帮你，请他协助呼叫。")
-    if route == "urgent_others":
-        return _reply("offer_option", "check_in", "请和对方保持安全距离。", "如果可能马上伤到人，请立即联系当地紧急服务。")
-    if route == "urgent":
-        return _reply("offer_option", "check_in", "如果你可能马上伤到自己，请立即联系当地急救。", "可以请身边可信的人陪同求助。")
-    if route == "safety_check":
-        return _reply("clarify", "check_in", "我想先确认你此刻的安全。", "现在你或身边的人面临马上受伤的危险吗？")
-    if route == "medication":
-        return _reply("offer_option", "gentle", "用药和剂量请和开药的医生或药师确认。", "我可以陪你整理想问的问题。")
-    if route == "diagnosis":
-        return _reply("offer_option", "gentle", "这些困扰值得和专业人员一起评估。", "你最希望先谈哪种变化？")
-    if route == "suspicion":
-        return _reply("reflect", "gentle", "我还不确定对方怎么想。", "当时发生了什么，让你有这种感觉？")
+    if route in SAFETY_ROUTES:
+        entry = _config().policy["safety"][route]
+        return _reply(entry["intent"], entry["voice_style"], *entry["sentences"])
     if route == "correction":
         speed = _speed(text)
         if speed == "normal":
             return _reply("reflect", "neutral", "好，我们按正常语速继续。")
         if speed == "slow":
             return _reply("reflect", "gentle", "好，我们说慢一点。")
+        if speed == "fast":
+            return _reply("reflect", "neutral", "好，我们加快一点。")
+        fact = _corrected_fact(text)
+        if fact:
+            return _reply("reflect", "neutral", f"好，是{fact}。")
         return _reply("reflect", "neutral", "谢谢你纠正我，接下来按你刚说的来。")
     if route == "recall":
         if not readable:
@@ -318,8 +432,6 @@ def _fallback(route, text, memories, readable=True):
         return _reply("clarify", "check_in", "我还没听明白，你指的是哪一件事？")
     if route == "practice":
         return _reply("practice", "practice", "我们先练第一句。", "你想让听众先记住哪一点？")
-    if route == "boundary":
-        return _reply("listen", "gentle", "我可以听你说，也能陪你整理现在的困扰。")
     return _reply("listen", "gentle", "我在听。", "你愿意再说一点吗？")
 
 
@@ -376,6 +488,19 @@ def _hard_violation(candidate):
         r"|我保证|保证(治好|痊愈|康复)|我能看穿|根据.{0,4}(表情|语气).{0,4}判断你", text))
 
 
+def _gate(reply, policy):
+    """The last door: nothing leaves without the same structure/boundary checks.
+
+    Model output already passes ``_invalid_candidate`` and ``_hard_violation``,
+    but the fixed text and the correction echo did not, so a 260-character or
+    diagnosis-bearing fallback would have gone straight to captions and TTS.
+    """
+    if _invalid_candidate(reply, policy) or _hard_violation(reply):
+        logger.error("预审/动态短句未通过出口校验，已退回通用句：%r", reply.get("sentences"))
+        return _reply("listen", "gentle", "我在听。", "你愿意再说一点吗？")
+    return reply
+
+
 def _candidate_result(runtime, context, fallback, cancelled):
     if runtime.generate is None:
         return fallback, "fixture"
@@ -410,6 +535,8 @@ def respond(ctx, text: str, cancelled) -> ApprovedReply:
     """
     _checkpoint(cancelled)
     _check_ctx(ctx, require_input=True)
+    if ctx.get("turn_id") == "R0":
+        raise DomainError(400, "INVALID_ARGUMENT", "欢迎轮没有用户原话，请用 opening()。")
     text = _id(text, "text").strip()
     runtime = _config()
     history = _current_history(ctx, text)
@@ -425,8 +552,15 @@ def respond(ctx, text: str, cancelled) -> ApprovedReply:
                    "memories": _select_memories(memories, text),
                    "background": {"speech_rate": _resolved_rate(ctx, text, memories)}}
         outcome, reason = _candidate_result(runtime, context, fallback, cancelled)
+    # Approved safety text is validated at startup; everything else passes the
+    # same structural gate as model output, including the correction echo.
+    if route not in SAFETY_ROUTES:
+        outcome = _gate(outcome, runtime.policy)
     _checkpoint(cancelled)
     if runtime.on_decision:
-        runtime.on_decision(reason)
+        try:
+            runtime.on_decision(reason)
+        except Exception:  # a logging/telemetry hook must never swallow the turn
+            logger.exception("on_decision 回调失败，已忽略（不影响本轮交付）")
     _checkpoint(cancelled)
     return outcome

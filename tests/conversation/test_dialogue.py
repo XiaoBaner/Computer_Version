@@ -9,7 +9,7 @@ import re
 import pytest
 
 from conversation import service
-from conversation.memory import MemoryStore
+from conversation.memory import DomainError, MemoryStore
 
 
 INTENTS = {"listen", "reflect", "clarify", "offer_option", "practice"}
@@ -100,15 +100,28 @@ def test_R18_quiet_request_is_respected_without_another_question():
     assert not re.search("建议|应该|抑郁|焦虑|诊断", text)
 
 
-def test_M14_prior_authorized_background_changes_opening_style_only():
-    reply = service.opening(context(input_id=None, turn_id="R0",
-                                    background={"speech_rate":"slow", "private":"虚构的私事"}))
-    assert reply["voice_style"] == "gentle"
+def test_R11_correction_echoes_the_new_fact():
+    """R11 的判据是"按周五接话"，不是"说了一句纠正的客套话"。
+
+    旧实现回"谢谢你纠正我，接下来按你刚说的来"，而路由正则里有"纠正"，
+    于是这条用例一直是假通过。
+    """
+    text = clean_text(generated("我说错了，不是周四，是周五。"))
+    assert "周五" in text and "周四" not in text
+
+
+def test_M14_prior_authorized_background_changes_speech_rate_not_voice_style():
+    ctx = context(input_id=None, turn_id="R0",
+                  background={"speech_rate": "slow", "private": "虚构的私事"})
+    reply = service.opening(ctx)
+    # 语速与语调分开：style 固定 neutral，慢速只经 speech_rate 交给语音侧。
+    assert reply["voice_style"] == "neutral"
+    assert service.speech_rate(ctx) == "slow"
     assert "虚构的私事" not in clean_text(reply) and reply["memory_draft"] is None
 
 
 def save_from_input(ctx, value, kind):
-    service.record_source(ctx, f"记住，{value}", save_authorized=True)
+    service.record_source(ctx, f"记住，{value}", save_authorized=True, authorized_text=value)
     return service.apply_memory(ctx["user_id"], {
         "op": "save", "kind": kind, "value": value, "source_turn_id": ctx["turn_id"],
         "session_id": ctx["session_id"], "request_id": "save-" + ctx["turn_id"]
@@ -154,13 +167,26 @@ def test_M16_confirmed_rate_is_corrected_then_restored_across_sessions(tmp_path)
 
 
 def test_M17_process_local_fixture_is_partitioned_and_disappears_on_reset():
-    service.configure()
+    from conversation.fixture_memory import DictMemoryStore
+    service.configure(store=DictMemoryStore())
     first = context()
     row = save_from_input(first, "下次继续练答辩", "follow_up")
     assert service.list_memories(first["user_id"]) == [row]
     assert service.list_memories("demo-b") == []
-    service.configure()
+    service.configure(store=DictMemoryStore())
     assert service.list_memories(first["user_id"]) == []
+
+
+def test_M21_memory_io_requires_an_injected_store():
+    """Forgetting configure(store=...) must fail loudly, not lose writes on restart."""
+    from conversation.memory import DomainError
+    service.configure()
+    assert service.opening(context(input_id=None, turn_id="R0"))["sentences"]
+    for call in (lambda: service.list_memories("demo-a"),
+                 lambda: service.apply_memory("demo-a", {"op": "delete", "memory_id": "M1"})):
+        with pytest.raises(DomainError) as exc:
+            call()
+        assert exc.value.status == 503 and exc.value.retryable
 
 
 def test_M18_unrelated_memory_does_not_answer_specific_recall_query():
@@ -174,13 +200,18 @@ def test_G01_generator_timeout_returns_approved_short_text(sandbox):
     def broken(_ctx):
         raise TimeoutError("provider")
     service.configure(store=sandbox, generator=broken, reviewer=lambda *_: True)
-    assert clean_text(generated("我想说说今天的事。"))
+    reply = generated("我想说说今天的事。")
+    # 必须等于预审短句；此前的 assert clean_text(...) 恒真，等于没测。
+    assert reply["sentences"] == ["我在听。", "你愿意再说一点吗？"]
+    clean_text(reply)
 
 
 def test_G02_structurally_invalid_candidate_never_escapes(sandbox):
     bad = dict(APPROVED, intent="prescribe", sentences=["不应发送的草稿"])
     service.configure(store=sandbox, generator=lambda _:bad, reviewer=lambda *_: True)
-    assert "不应发送的草稿" not in clean_text(generated("和我聊聊吧。"))
+    reply = generated("和我聊聊吧。")
+    assert "不应发送的草稿" not in clean_text(reply)
+    assert reply["sentences"] == ["我在听。", "你愿意再说一点吗？"]
 
 
 @pytest.mark.parametrize("unsafe", [
@@ -198,7 +229,9 @@ def test_G09_reviewer_timeout_fails_closed(sandbox):
     def broken(*args):
         raise TimeoutError("reviewer")
     service.configure(store=sandbox, generator=lambda _:dict(APPROVED), reviewer=broken)
-    assert APPROVED["sentences"][0] not in clean_text(generated("我想说件事。"))
+    reply = generated("我想说件事。")
+    assert APPROVED["sentences"][0] not in clean_text(reply)
+    assert reply["sentences"] == ["我在听。", "你愿意再说一点吗？"]
 
 
 def test_G10_accepted_sentences_are_the_only_handoff_contract(sandbox):
@@ -251,3 +284,138 @@ def test_G15_approved_draft_is_returned_but_never_written(sandbox):
     result = generated("我想聊聊答辩的事。")
     assert result["memory_draft"] == {"kind": "follow_up", "text": "下次继续练答辩"}
     assert service.list_memories("demo-a") == []
+
+
+class UnreadableStore:
+    """A store that is present but sick: reads must degrade, not crash the turn."""
+
+    def list_memories(self, user_id):
+        raise DomainError(503, "MEMORY_UNAVAILABLE", "记忆库暂不可用。")
+
+    def apply_memory(self, user_id, cmd):
+        raise DomainError(503, "MEMORY_UNAVAILABLE", "记忆库暂不可用。")
+
+
+def test_G16_recall_with_unreadable_store_says_so_instead_of_guessing():
+    service.configure(store=UnreadableStore())
+    text = clean_text(generated("你还记得我上次要练什么吗？"))
+    assert "暂时读不到" in text
+    assert "答辩" not in text
+
+
+def test_G17_safety_sentences_come_from_the_policy_file():
+    """改危机/用药话术只应动 policy.yml；这条用例锁住"配置真的被读取"。"""
+    import json
+    from pathlib import Path
+    policy = json.loads((Path(service.__file__).with_name("policy.yml")).read_text(encoding="utf-8"))
+    reply = generated("只说是或不是，我是不是得了某种病？")
+    assert reply["intent"] == policy["safety"]["diagnosis"]["intent"]
+    assert reply["voice_style"] == policy["safety"]["diagnosis"]["voice_style"]
+    assert reply["sentences"] == policy["safety"]["diagnosis"]["sentences"]
+
+
+def test_R11b_correction_never_reads_a_diagnosis_aloud():
+    """回显也是出口：不能把病名、药名、链接念出去。"""
+    text = clean_text(generated("我说错了，不是抑郁症，是焦虑症。"))
+    assert "焦虑" not in text and "抑郁" not in text
+    link = clean_text(generated("我说错了，不是那个链接，是http://x.co"))
+    assert "http" not in link.lower()
+
+
+def test_R12_welcome_turn_cannot_be_answered_as_input():
+    with pytest.raises(DomainError) as exc:
+        service.respond(context(turn_id="R0"), "你好。", lambda: False)
+    assert exc.value.status == 400
+
+
+@pytest.mark.parametrize(("text", "route"), [
+    ("我自己不想活了", "safety_check"),
+    ("我现在就想死", "urgent"),
+    ("我自己割伤了自己", "urgent_medical"),
+    ("我刚刚割伤了自己的手臂", "urgent_medical"),
+    ("我自己划伤了手臂", "urgent_medical"),
+    ("我控制不住想伤害自己", "urgent"),
+    ("我准备今晚动手", "urgent"),
+    ("去年我想过自杀", "safety_check"),
+    ("我没想过自杀", "listen"),
+    ("电影里有人自杀", "listen"),
+    ("我的同学说他不想活了", "safety_check"),
+    ("我吃了整瓶药", "urgent_medical"),
+])
+def test_R13_danger_routes_cover_named_and_unnamed_forms(text, route):
+    """明确危险、既往、否定、第三人转述四种形态都要落到正确分流。"""
+    assert service._route(text, []) == route
+
+
+@pytest.mark.parametrize(("text", "expected"), [
+    ("麻烦说慢一点", "slow"),
+    ("你说话太快了", "fast"),
+    ("正常速度就好", "normal"),
+    ("走路很慢", None),
+    ("我最近慢热", None),
+    ("我很快乐", None),
+    ("快考试了", None),
+])
+def test_R14_speed_follows_speech_not_life(text, expected):
+    """走路慢、慢热、快乐都不是"说话慢"。"""
+    assert service._speed(text) is expected
+
+
+def test_R15_speech_rate_factor_is_numeric_for_tts(sandbox):
+    assert service.speech_rate_factor(context()) == 1.0
+    service.record_source(context(), "记住，语速慢一点。",
+                          save_authorized=True, authorized_text="语速慢一点")
+    service.apply_memory("demo-a", {"op": "save", "kind": "preference", "value": "语速慢一点",
+                                    "session_id": "session-1", "source_turn_id": "R1",
+                                    "request_id": "factor-1"})
+    assert service.speech_rate(context()) == "slow"
+    assert service.speech_rate_factor(context()) == 0.85
+
+
+def _policy():
+    import json
+    from pathlib import Path
+    return json.loads((Path(service.__file__).with_name("policy.yml")).read_text(encoding="utf-8"))
+
+
+def test_P1_safety_template_is_validated_at_startup():
+    import copy
+    service._validate_policy(_policy())  # 正常文件必须通过
+
+    too_long = copy.deepcopy(_policy())
+    too_long["safety"]["urgent"]["sentences"] = ["呼" * 61]
+    with pytest.raises(ValueError, match="单句长度"):
+        service._validate_policy(too_long)
+
+    forbidden = copy.deepcopy(_policy())
+    forbidden["safety"]["medication"]["sentences"] = ["建议购买某某药。"]
+    with pytest.raises(ValueError, match="越界措辞"):
+        service._validate_policy(forbidden)
+
+    missing = copy.deepcopy(_policy())
+    del missing["safety"]["urgent"]
+    with pytest.raises(ValueError, match="urgent"):
+        service._validate_policy(missing)
+
+    enum = copy.deepcopy(_policy())
+    enum["safety"]["diagnosis"]["intent"] = "prescribe"
+    with pytest.raises(ValueError, match="枚举"):
+        service._validate_policy(enum)
+
+
+def test_P2_health_reports_whether_crisis_text_is_approved():
+    service.configure()
+    status = service.health()
+    assert isinstance(status["crisis_text_approved"], bool)
+    assert status["policy_version"] == "weekend-v1"
+    assert status["memory_ready"] is False
+
+
+def test_P3_closed_fixture_refuses_instead_of_reopening():
+    from conversation.fixture_memory import DictMemoryStore
+    fixture = DictMemoryStore()
+    fixture.list_memories("demo-a")
+    fixture.close()
+    with pytest.raises(DomainError) as exc:
+        fixture.list_memories("demo-a")
+    assert exc.value.status == 503 and exc.value.retryable

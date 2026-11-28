@@ -15,8 +15,10 @@ WISH = "下次继续练答辩"
 
 def source(store, *, value=WISH, number=1, grant=True, uid=A, authorized_text=None):
     text = "记住，" + value if grant else value
+    # The grant must now name the excerpt; default it to the value being saved.
+    excerpt = authorized_text if authorized_text is not None else (value if grant else None)
     store.record_source(uid, SESSION, f"R{number}", f"asr-{number}", text,
-                        save_authorized=grant, authorized_text=authorized_text)
+                        save_authorized=grant, authorized_text=excerpt)
 
 
 def from_source(op, number=1, value=WISH, kind="follow_up", **extra):
@@ -193,6 +195,82 @@ def test_M19_grant_binds_the_requested_item_not_the_whole_round(store):
     saved = store.apply_memory(A, from_source("save", value="语速慢一点", kind="preference"))
     assert saved["text"] == "语速慢一点" and saved["kind"] == "preference"
     assert store.list_memories(A) == [saved]
+
+
+def test_M22_save_requires_an_excerpt_even_when_authorized(store):
+    """漏传授权片段必须显式失败，不能默默把整轮当授权。"""
+    fail(403, lambda: store.record_source(
+        A, SESSION, "R1", "asr-1", "记住，语速慢一点，别记今天失眠。", save_authorized=True))
+    assert store.list_memories(A) == []
+
+
+def test_M23_same_preference_category_replaces_instead_of_duplicating(store):
+    """改口"叫我小王"→"叫我老王"必须替换，不是新增第二条。"""
+    source(store, value="叫我小王", number=1, authorized_text="叫我小王")
+    first = store.apply_memory(A, from_source("save", number=1, kind="preference", value="叫我小王"))
+    source(store, value="叫我老王", number=2, authorized_text="叫我老王")
+    second = store.apply_memory(A, from_source("save", number=2, kind="preference", value="叫我老王"))
+    assert first["memory_id"] == second["memory_id"]
+    assert second["revision"] == 2
+    assert [m["text"] for m in store.list_memories(A)] == ["叫我老王"]
+
+
+def test_M24_unrelated_preference_categories_coexist(store):
+    """称呼、语言、语速是三个槽位，不能互相覆盖。"""
+    for number, value in enumerate(("叫我小王", "用中文", "语速慢一点"), start=1):
+        source(store, value=value, number=number, authorized_text=value)
+        store.apply_memory(A, from_source("save", number=number, kind="preference", value=value))
+    assert sorted(m["text"] for m in store.list_memories(A)) == sorted(["叫我小王", "用中文", "语速慢一点"])
+
+
+def test_M25_emergency_phrase_is_not_an_address_preference(store):
+    """'别叫救护车' 不是称呼偏好，不能和'叫我小王'共用一个槽位。"""
+    for number, value in enumerate(("别叫救护车", "叫我小王"), start=1):
+        source(store, value=value, number=number, authorized_text=value)
+        store.apply_memory(A, from_source("save", number=number, kind="preference", value=value))
+    assert sorted(m["text"] for m in store.list_memories(A)) == sorted(["别叫救护车", "叫我小王"])
+
+
+def test_M26_negated_excerpt_cannot_authorize_its_opposite(store):
+    """'不喜欢慢速' 不能授权 '喜欢慢速'，'别记今天失眠' 不能授权 '今天失眠'。"""
+    store.record_source(A, SESSION, "R1", "asr-1", "记住，我不喜欢慢速。",
+                        save_authorized=True, authorized_text="不喜欢慢速")
+    fail(403, lambda: store.apply_memory(
+        A, from_source("save", number=1, kind="preference", value="喜欢慢速")))
+    store.record_source(A, SESSION, "R2", "asr-2", "记住，别记今天失眠。",
+                        save_authorized=True, authorized_text="别记今天失眠")
+    fail(403, lambda: store.apply_memory(
+        A, from_source("save", number=2, kind="follow_up", value="今天失眠")))
+    assert store.list_memories(A) == []
+
+
+def test_M27_late_save_after_confirm_and_delete_cannot_resurrect(store):
+    source(store, number=1)
+    draft = store.apply_memory(A, from_source("propose", number=1, text=WISH))
+    record = store.apply_memory(A, from_source("confirm", number=1, draft_id=draft["draft_id"]))
+    store.apply_memory(A, from_source("delete", number=1, memory_id=record["memory_id"]))
+    fail(403, lambda: store.apply_memory(A, from_source("save", number=1)))
+    assert store.list_memories(A) == []
+
+
+def test_M28_discarded_draft_revokes_the_round_grant(store):
+    source(store, number=1)
+    draft = store.apply_memory(A, from_source("propose", number=1, text=WISH))
+    store.apply_memory(A, from_source("discard_draft", number=1, draft_id=draft["draft_id"]))
+    fail(403, lambda: store.apply_memory(A, from_source("save", number=1)))
+    assert store.list_memories(A) == []
+
+
+def test_M29_draft_edit_cannot_move_to_another_slot(store):
+    """语速草稿被改成"打开字幕"时，不能沿用语速槽覆盖原记录。"""
+    source(store, value="语速慢一点", number=1)
+    draft = store.apply_memory(A, from_source("propose", number=1, kind="preference", text="语速慢一点"))
+    fail(400, lambda: store.apply_memory(
+        A, from_source("confirm", number=1, kind="preference", value="打开字幕", draft_id=draft["draft_id"])))
+    record = store.apply_memory(A, from_source("confirm", number=1, kind="preference",
+                                               value="语速慢一点", draft_id=draft["draft_id"]))
+    assert record["text"] == "语速慢一点"
+    assert [m["text"] for m in store.list_memories(A)] == ["语速慢一点"]
 
 
 def test_M20_authorized_excerpt_comes_from_the_round_and_needs_a_grant(store):

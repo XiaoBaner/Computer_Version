@@ -63,20 +63,58 @@ def squash(text):
     return re.sub(r"\s+", "", unicodedata.normalize("NFKC", text))
 
 
+_NEGATION = re.compile(r"(不|别|没|无|勿|莫|未)(想|喜欢|要|用|记|再|会|能|打算|准备)?$")
+
+
+def grant_covers(excerpt, value):
+    """True when the excerpt really authorizes this exact item.
+
+    A plain substring test lets "不喜欢慢速" authorize "喜欢慢速" and "别记今天失眠"
+    authorize "今天失眠": the match starts right after the negation, so the saved
+    item means the opposite. Every occurrence is therefore checked for a negation
+    immediately before it.
+    """
+    e, v = squash(excerpt), squash(value)
+    if not v:
+        return False
+    start = 0
+    while True:
+        found = e.find(v, start)
+        if found < 0:
+            return False
+        if not _NEGATION.search(e[max(0, found - 4):found]):
+            return True
+        start = found + 1
+
+
 def preference_slot(kind, text, key):
-    """Preference slots collapse a rephrased speed setting onto one record."""
+    """Collapse a rephrased setting onto one record.
+
+    A known category (speed, address, language, length) gets a stable slot, so
+    "叫我小王" followed by "叫我老王" replaces instead of duplicating. Anything
+    else stays without a slot: the server cannot tell two unrelated preferences
+    apart, so Flask must pass ``preference_key`` for those (see README).
+    """
     if key is not None:
         if kind != "preference":
             raise invalid("只有 preference 可带 preference_key。")
         return required(key, "preference_key")
-    speed_text = text.strip("，。！？,.!? ")
-    if kind == "preference" and (speed_text in {
-        "慢一点", "快一点", "按正常速度", "按正常速度就行", "正常速度",
-    } or any(term in speed_text for term in (
-        "语速", "说慢", "说快", "说话慢", "说话快", "慢点说", "快点说",
-        "正常速度说", "正常速度讲",
-    ))):
+    if kind != "preference":
+        return None
+    value = text.strip("，。！？,.!? ")
+    if value in {"慢一点", "快一点", "按正常速度", "按正常速度就行", "正常速度"} or any(
+            term in value for term in (
+                "语速", "说慢", "说快", "说话慢", "说话快", "慢点说", "快点说",
+                "正常速度说", "正常速度讲")):
         return "voice_speed"
+    if re.search(r"^(?:请)?叫我|^称呼我|(?:怎么|如何)称呼", value):
+        return "address_name"
+    if any(term in value for term in ("字幕", "字幕开关", "显示文字", "关掉字幕", "打开字幕")):
+        return "subtitle"
+    if any(term in value for term in ("中文", "英文", "英语", "普通话", "语言", "说中文", "说英文")):
+        return "language"
+    if any(term in value for term in ("短句", "长句", "简短", "简洁", "少说", "多说")):
+        return "sentence_length"
     return None
 
 
@@ -107,6 +145,9 @@ CREATE TABLE IF NOT EXISTS conv_request_keys (
     uid TEXT, request_id TEXT, binding TEXT NOT NULL, PRIMARY KEY(uid,request_id)
 );
 """
+
+
+_REQUIRED = object()
 
 
 class MemoryStore:
@@ -154,13 +195,15 @@ class MemoryStore:
                     db.close()  # rolls back any uncommitted transaction, including DomainError.
 
     def record_source(self, user_id, session_id, turn_id, input_id, text, *,
-                      save_authorized=False, authorized_text=None):
+                      save_authorized=False, authorized_text=_REQUIRED):
         """Register the server-accepted final input and its already-verified grant.
 
-        ``authorized_text`` narrows the grant to the exact words the user asked to
-        keep. "记住语速慢一点，别记今天失眠。" must pass "语速慢一点" and must not
-        let "今天失眠" become a stored fact. ``None`` keeps the whole utterance,
-        which is only appropriate when the whole utterance is the saved object.
+        ``authorized_text`` is the exact excerpt the user asked to keep, and it is
+        required whenever ``save_authorized`` is true. That is deliberate: a grant
+        that is not bound to words cannot stop "记住语速慢一点，别记今天失眠" from
+        storing "今天失眠", and a silent whole-utterance default would do exactly
+        that. Callers that only know a preference is approved (not which sentence
+        says so) must use ``propose`` + ``confirm`` instead of ``save``.
         """
         uid = identity(user_id)
         sid, turn, inp, original = (required(v, k) for v, k in (
@@ -168,11 +211,15 @@ class MemoryStore:
         if turn == "R0" or type(save_authorized) is not bool:
             raise invalid("欢迎回合不能登记；保存授权必须是服务端布尔值。")
         if not save_authorized:
-            if authorized_text is not None:
+            if authorized_text not in (_REQUIRED, None):
                 raise invalid("未授权的输入不能绑定待存片段。")
             grant = None
         else:
-            grant = original if authorized_text is None else required(authorized_text, "authorized_text")
+            if authorized_text is _REQUIRED or authorized_text is None or not str(authorized_text).strip():
+                raise DomainError(403, "SAVE_NOT_AUTHORIZED",
+                                  "服务端未绑定本轮授权片段：record_source 必须传 authorized_text"
+                                  "（整轮即片段时传 text）；只有确认过的草稿可直接写入。")
+            grant = required(authorized_text, "authorized_text")
             if squash(grant) not in squash(original):
                 raise invalid("授权片段必须来自本轮原话。")
         fingerprint = digest(original)
@@ -296,6 +343,8 @@ class MemoryStore:
         prior = db.execute("SELECT * FROM conv_intents WHERE uid=? AND sid=? AND turn=? AND op=?",
                            (uid, sid, turn, op)).fetchone()
         if prior:
+            if op == "save" and prior["target"] == "revoked":
+                raise DomainError(403, "SAVE_NOT_AUTHORIZED", "该回合的保存授权已撤回。")
             if prior["payload_hash"] != fp:
                 raise conflict("相同来源和操作的正文发生变化。")
             ident = prior["target"]
@@ -312,8 +361,9 @@ class MemoryStore:
         if op == "save":
             # The grant is bound to the verified excerpt, not merely to the round
             # containing "记住", so an explicitly excluded item cannot be stored.
+            # A negation prefix ("不喜欢慢速") must not authorize its opposite.
             if (not src["authorized"] or not src["authorized_text"]
-                    or squash(value) not in squash(src["authorized_text"])):
+                    or not grant_covers(src["authorized_text"], value)):
                 raise DomainError(403, "SAVE_NOT_AUTHORIZED",
                                   "需从正式来源核实保存授权与原文，改写内容请先提交草稿。")
             result = self._commit_record(db, uid, sid, turn, kind, value, slot, "user_authorized", expires, now)
@@ -332,12 +382,25 @@ class MemoryStore:
                    (uid, sid, turn, op, fp, ident))
         return result, 201
 
+    def _revoke_source(self, db, uid, sid, turn):
+        """Withdraw the round's save grant and tombstone any late ``save``.
+
+        Without this, "confirm → delete → late save" recreates the record on the
+        same source turn: the grant is still stored, and ``save`` is a different
+        idempotency key from ``confirm``.
+        """
+        db.execute("UPDATE conv_sources SET authorized_text=NULL WHERE uid=? AND sid=? AND turn=?",
+                   (uid, sid, turn))
+        db.execute("INSERT OR IGNORE INTO conv_intents VALUES(?,?,?,?,?,?)",
+                   (uid, sid, turn, "save", "*", "revoked"))
+
     def _from_draft(self, db, uid, op, cmd, draft, now):
         did, state = draft["id"], draft["status"]
         if op == "discard_draft":
             if state == "confirmed":
                 raise conflict("草稿已确认。")
             db.execute("UPDATE conv_drafts SET status='discarded',text='' WHERE uid=? AND id=?", (uid, did))
+            self._revoke_source(db, uid, draft["sid"], draft["turn"])
             return {"draft_id": did}, 204
         if state == "discarded":
             raise conflict("草稿已丢弃。")
@@ -355,11 +418,18 @@ class MemoryStore:
         active_version = (current["id"], current["revision"]) if current else (None, None)
         if active_version != (draft["base_id"], draft["base_rev"]):
             raise conflict("偏好在草稿创建后已变更。")
+        # Editing the text must not smuggle the draft into another slot: a speed
+        # draft rewritten to "打开字幕" would otherwise overwrite the speed record.
+        recomputed = preference_slot(draft["kind"], value, None)
+        if draft["slot"] is not None and recomputed != draft["slot"]:
+            raise invalid("草稿改成了别的偏好类别，请重新提交草稿。")
+        slot = draft["slot"] if recomputed is None else recomputed
         result = self._commit_record(db, uid, draft["sid"], draft["turn"], draft["kind"], value,
-                                     draft["slot"], "user_confirmed", draft["expires_at"], now)
+                                     slot, "user_confirmed", draft["expires_at"], now)
         db.execute("""UPDATE conv_drafts SET status='confirmed',memory_id=?,confirmed_text=?,
             confirmed_rev=? WHERE uid=? AND id=?""",
                    (result["memory_id"], value, result["revision"], uid, did))
+        self._revoke_source(db, uid, draft["sid"], draft["turn"])
         return result, 201
 
     def _from_record(self, db, uid, op, cmd, row, now):
@@ -376,6 +446,7 @@ class MemoryStore:
                 db.execute("""UPDATE conv_drafts SET status='discarded',text='' WHERE uid=? AND status='pending'
                     AND (base_id=? OR (slot IS NOT NULL AND slot=?) OR (sid=? AND turn=? AND kind=?))""",
                            (uid, mid, row["slot"], row["sid"], row["turn"], row["kind"]))
+                self._revoke_source(db, uid, row["sid"], row["turn"])
             return {"memory_id": mid}, 204
         self._live(row, now)
         rev = cmd.get("expected_revision")

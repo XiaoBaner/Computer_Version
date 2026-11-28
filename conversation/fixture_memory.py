@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from threading import RLock
 import time
 
-from .memory import MemoryStore, identity
+from .memory import DomainError, MemoryStore, identity
 
 
 class DictMemoryStore:
@@ -16,11 +16,16 @@ class DictMemoryStore:
         self.clock = clock
         self._users = {}
         self._lock = RLock()
+        self._closed = False
 
     @contextmanager
     def _for_user(self, user_id):
         uid = identity(user_id)
         with self._lock:
+            if self._closed:
+                # A real store would fail here too; silently starting a fresh empty
+                # DB after close() is how "demo passed, production lost data" starts.
+                raise DomainError(503, "MEMORY_UNAVAILABLE", "替身已关闭，请重新注入 store。")
             if uid not in self._users:
                 self._users[uid] = MemoryStore(":memory:", clock=self.clock)
             yield self._users[uid]
@@ -45,6 +50,9 @@ class DictMemoryStore:
 
     def close(self):
         with self._lock:
+            if self._closed:
+                return
             for store in self._users.values():
                 store.close()
             self._users.clear()
+            self._closed = True

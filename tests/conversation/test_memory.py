@@ -226,6 +226,16 @@ def test_M23b_rephrased_address_lands_in_the_same_slot(store):
     assert items[0]["revision"] == 2
 
 
+@pytest.mark.parametrize("other", ["明早叫我起床", "请叫我起床", "室友以前叫我老师", "提醒我妈妈叫我起床"])
+def test_reminders_and_reported_speech_preserve_a_confirmed_address(store, other):
+    source(store, value="以后叫我小王")
+    first = store.apply_memory(A, from_source("save", value="以后叫我小王", kind="preference"))
+    source(store, value=other, number=2)
+    second = store.apply_memory(A, from_source("save", 2, other, "preference"))
+    assert second["memory_id"] != first["memory_id"]
+    assert set(m["text"] for m in store.list_memories(A)) == {"以后叫我小王", other}
+
+
 def test_M24_unrelated_preference_categories_coexist(store):
     """称呼、语言、语速是三个槽位，不能互相覆盖。"""
     for number, value in enumerate(("叫我小王", "用中文", "语速慢一点"), start=1):
@@ -346,7 +356,8 @@ def test_cross_slot_patch_preserves_both_preferences(store):
     assert store.list_memories(A) == before
 
 
-def test_migration_resolves_duplicate_slots_and_keeps_unrelated_confirmed_records(path):
+@pytest.mark.parametrize("deleted_old_id", [False, True])
+def test_migration_resolves_duplicate_slots_and_keeps_unrelated_confirmed_records(path, deleted_old_id):
     # Recreate the v0 tables whose persisted layout/data this migration reads.
     # In v0 an explicit preference_key could coexist with another same-kind
     # record where the address slot had not yet been inferred.
@@ -370,6 +381,10 @@ def test_migration_resolves_duplicate_slots_and_keeps_unrelated_confirmed_record
             kind = "follow_up" if n == 3 else "preference"
             legacy.execute("INSERT INTO conv_memories VALUES(?,?,?,?,1,'user_confirmed',?,?,?,'active',?,NULL)",
                            (A, f"M{n}", kind, value, SESSION, f"R{n}", slot, n))
+        if deleted_old_id:
+            # Deleting M1 after M2 was committed gives the tombstone the highest
+            # updated_at. M2 was still live when the old process stopped.
+            legacy.execute("UPDATE conv_memories SET status='deleted',text='',updated_at=4 WHERE id='M1'")
     db = MemoryStore(path)
     assert {m["memory_id"] for m in db.list_memories(A)} == {"M2", "M3"}
     source(db, number=4, value="叫我陈老师")
@@ -377,3 +392,77 @@ def test_migration_resolves_duplicate_slots_and_keeps_unrelated_confirmed_record
     assert saved == dict(memory_id="M2", kind="preference", text="叫我陈老师", revision=2)
     db.close()
     assert {m["text"] for m in MemoryStore(path).list_memories(A)} == {"叫我陈老师", "下次练结尾"}
+
+
+@pytest.mark.parametrize("withdraw_after_expiry", [False, True])
+def test_withdrawal_fences_only_older_same_user_kind_and_item(path, withdraw_after_expiry):
+    now = [1000]
+    db = MemoryStore(path, clock=lambda: now[0])
+    source(db, number=1)
+    source(db, number=2, value="练习另一段")
+    source(db, number=3, uid=B)
+    source(db, number=4)
+    db.record_source(A, "second-session", "R1", "I1", "记住，" + WISH,
+                     save_authorized=True, authorized_text=WISH)
+    confirmed = db.apply_memory(A, from_source("save", session_id="second-session",
+        request_id="second-session/save", expires_at=now[0]+1))
+    remove = dict(op="delete", request_id="remove", memory_id=confirmed["memory_id"])
+    if withdraw_after_expiry:
+        now[0] += 1
+        assert db.list_memories(A) == []
+    assert db.apply_memory_with_status(A, remove)[1] == 204
+    db.close()
+    db = MemoryStore(path, clock=lambda: now[0])
+    fail(409, lambda: db.apply_memory(A, from_source("save", 1)))
+    assert db.list_memories(A) == []
+    assert db.apply_memory(A, from_source("save", 2, value="练习另一段"))["text"] == "练习另一段"
+    assert db.apply_memory(B, from_source("save", 3))["text"] == WISH
+    assert db.apply_memory(A, from_source("save", 4, kind="preference"))["kind"] == "preference"
+    # A freshly authorized item may return even if a late duplicate DELETE
+    # for the old ID arrives between acceptance and commit.
+    source(db, number=5)
+    assert db.apply_memory_with_status(A, remove)[1] == 204
+    renewed = db.apply_memory(A, from_source("save", 5))
+    assert renewed["memory_id"] != confirmed["memory_id"] and renewed in db.list_memories(A)
+
+
+def test_withdrawal_also_fences_queued_proposals_and_edits_of_older_drafts(store):
+    for number, text in [(1, WISH), (2, "下周聊汇报"), (3, WISH), (4, WISH)]:
+        source(store, number=number, value=text)
+    old = store.apply_memory(A, from_source("propose", 1))
+    other = store.apply_memory(A, from_source("propose", 2, value="下周聊汇报"))
+    saved = store.apply_memory(A, from_source("save", 3))
+    store.apply_memory(A, dict(op="delete", memory_id=saved["memory_id"], request_id="remove"))
+    for number in [1, 4]:  # replay and first late proposal
+        fail(409, lambda: store.apply_memory(A, from_source("propose", number)))
+    fail(409, lambda: store.apply_memory(A, dict(op="confirm", **old, request_id="old-confirm")))
+    fail(409, lambda: store.apply_memory(A, dict(op="confirm", **other, value=WISH, request_id="other-confirm")))
+    assert store.list_memories(A) == []
+    assert store.apply_memory(A, dict(op="confirm", **other, request_id="other-confirm"))["text"] == "下周聊汇报"
+
+
+def test_failed_withdrawal_does_not_block_other_pending_sources(path, store):
+    source(store, number=1)
+    source(store, number=2)
+    command = from_source("save", 2)
+    saved = store.apply_memory(A, command)
+    # The internal ID validation runs late in the same transaction. The item's
+    # withdrawal marker and its tombstone both have to roll back on conflict.
+    fail(409, lambda: store.apply_memory(A, dict(op="delete", memory_id=saved["memory_id"],
+                                                 request_id=command["request_id"])))
+    reopened = MemoryStore(path)
+    assert reopened.list_memories(A) == [saved]
+    assert reopened.apply_memory(A, from_source("save", 1))["text"] == WISH
+def test_source_order_index_is_repaired_on_reopen(tmp_path):
+    path = tmp_path / "partially-restored.sqlite"
+    with sqlite3.connect(path) as db:
+        store = MemoryStore(path)
+        store.record_source("u", "s", "r", "i", "一个已接纳回合")
+        store.close()
+        db.execute("DROP INDEX conv_accepted_order")
+    opened = MemoryStore(path)
+    opened.close()
+    with sqlite3.connect(path) as db:
+        names = {row[1]: row[2] for row in db.execute("PRAGMA index_list(conv_sources)")}
+        assert names["conv_accepted_order"] == 1
+        assert db.execute("SELECT accepted_order FROM conv_sources").fetchall() == [(1,)]

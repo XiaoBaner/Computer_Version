@@ -15,6 +15,15 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 PROMPTS = Path(__file__).with_name("prompts")
 
 
+def _unique_fields(pairs):
+    obj = {}
+    for key, value in pairs:
+        if key in obj:
+            raise ValueError("供应商的 JSON 包含重复字段。")
+        obj[key] = value
+    return obj
+
+
 class NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
@@ -57,8 +66,9 @@ class ChatProvider:
             body = response.read(262145)
         if len(body) > 262144:
             raise ValueError("供应商响应过大。")
-        text = json.loads(body)["choices"][0]["message"]["content"]
-        result = json.loads(text)
+        envelope = json.loads(body, object_pairs_hook=_unique_fields)
+        text = envelope["choices"][0]["message"]["content"]
+        result = json.loads(text, object_pairs_hook=_unique_fields)
         if not isinstance(result, dict):
             raise ValueError("供应商需要返回 JSON 对象。")
         return result

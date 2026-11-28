@@ -236,7 +236,19 @@ def _read_for_reply(ctx):
 
 def _speed(text):
     """Resolve a speech setting or a request about our voice, not unrelated motion."""
-    text = _norm(text).strip("，。！？,.!? ")
+    # Third-person speech and quoted suggestions describe someone else's words.
+    # A later first-person request in a different clause still takes effect.
+    normalized = re.sub(r"([说讲])[,:，：]\s*", r"\1", _norm(text))
+    for clause in reversed(re.split(r"[，。！？,.!?；;]|但是|不过", normalized)):
+        if re.search(r"(?:他|她|别人|同学|老师|朋友|同事|家人)(?:[^，。！？]{0,6})(?:说|讲|语速)", clause):
+            continue
+        rate = _speech_request(clause)
+        if rate:
+            return rate
+    return None
+
+
+def _speech_request(text):
     if re.fullmatch(r"(请|还是|就)?(按|用|恢复)?正常(语速|速度)(说|讲|就行|就好|吧)?", text):
         return "normal"
     if re.search(r"正常语速|恢复原速|(?:还是按|改回|恢复)正常速度|不用.{0,3}(慢|快)(速|点说)|不喜欢(慢|快)速", text):
@@ -247,10 +259,10 @@ def _speed(text):
     if re.search(r"(?:你(?:说话|讲话|说得|讲得)|你的语速)(?:有点|太|过于)慢", text):
         return "fast"
     # "别快说" / "别慢点说" / "别那么慢" ask for the opposite of the word they contain.
-    if re.search(r"(?:别|不要|不用|不必)(?:再)?(?:那么|这么|太)?(?:说得?|讲得?)?快", text):
-        return "slow"
-    if re.search(r"(?:别|不要|不用|不必)(?:再)?(?:那么|这么|太)?(?:说得?|讲得?)?慢", text):
-        return "fast"
+    negated = re.fullmatch(r"(?:请|麻烦)?(?:你)?(?:别|不要|不用|不必)(?:再)?(?:那么|这么|太)?"
+                           r"(?:说得?|讲得?)?([快慢])(?:点|一点|些)?(?:说|讲)?(?:啦|了|吧)?", text)
+    if negated:
+        return "slow" if negated.group(1) == "快" else "fast"
     if re.search(r"(?:说|讲|语速)(?:得|再|能不能|可以)?快|快(?:一点|点|一些|些)?(?:儿)?(?:说|讲)|加快语速", text):
         return "fast"
     if re.search(r"(?:说|讲|语速)(?:得|再|能不能|可以)?慢|慢(?:一点|点|一些|些)?(?:儿)?(?:说|讲)|放慢语速", text):
@@ -264,21 +276,35 @@ def _speed(text):
     return None
 
 
+def _configured_rate(value):
+    """Interpret the authorized, explicitly named background speech_rate field."""
+    if not isinstance(value, str):
+        return None
+    value = _norm(value).strip("，。！？,.!? ")
+    return {"slow": "slow", "慢速": "slow", "慢一点": "slow",
+            "fast": "fast", "快速": "fast", "快一点": "fast",
+            "normal": "normal", "正常": "normal", "正常速度": "normal"}.get(value)
+
+
+def _stored_speech_rate(text):
+    # These are the two unqualified Chinese values recognized as voice_speed
+    # when stored. An arbitrary preference called "正常" has no such meaning.
+    value = _norm(text).strip("，。！？,.!? ")
+    return {"慢一点": "slow", "快一点": "fast"}.get(value) or _speed(text)
+
+
 def _resolved_rate(ctx, text, memories):
     rate = _speed(text)
     if rate:
         return rate
     for item in memories:
         if item["kind"] == "preference":
-            rate = _speed(item["text"])
+            rate = _stored_speech_rate(item["text"])
             if rate:
                 return rate
     # This optional field is a server-authorized setting. Flask must invalidate
     # a memory-derived background on update/delete, not reuse a bootstrap copy.
-    rate = ctx.get("background", {}).get("speech_rate")
-    if rate in ("slow", "慢速"):
-        return "slow"
-    return "fast" if rate in ("fast", "快速") else "normal"
+    return _configured_rate(ctx.get("background", {}).get("speech_rate")) or "normal"
 
 
 #: Numeric mapping for the TTS side. 王皓 must not receive the string "slow";
@@ -370,6 +396,10 @@ def _route(text, history):
             return "urgent"
     if safety_check:
         return "safety_check"
+    if _confirms_current_danger(t, history):
+        # This policy entry asks for immediate help without assigning a target
+        # or claiming someone has already been injured.
+        return "urgent_medical"
     prior = "".join(h["text"] for h in history[-3:])
     if re.search(r"买.{0,6}药|推荐.{0,8}药|(帮我|给我|你|能不能|可以).{0,4}开(点|些|一下|什么)?药|"
                  r"吃什么药|该.{0,4}吃药|该.{0,3}用药|怎么.{0,3}(用药|服药)|停药|停服|加量|减量|调药|换药|多吃.{0,3}[粒颗片丸]|剂量|几[片粒颗]|多少毫克|吃哪.{0,3}药|能.{0,4}(吃|用).{0,5}药", t):
@@ -403,6 +433,26 @@ def _route(text, history):
     if re.search(r"练[^习药]{0,4}(开场|答辩|表达|汇报)|排练|陪我练|练习|试讲", t):
         return "practice"
     return "listen"
+
+
+def _confirms_current_danger(text, history):
+    """Interpret a short answer only to the most recent delivered safety question."""
+    if not history or history[-1]["role"] != "assistant":
+        return False
+    question = _config().policy["safety"]["safety_check"]["sentences"][-1]
+    last = _norm(history[-1]["text"]).strip("。！？.!?")
+    if not last.endswith(_norm(question).strip("。！？.!?")):
+        return False
+    # Match the complete answer. "是的，但现在已经安全" and "好，我们练习吧"
+    # cannot establish imminent danger. Explicit standalone disclosures are
+    # handled by the normal current-input rules above.
+    answer = re.sub(r"[，,。.!！\s]", "", text)
+    return bool(re.fullmatch(
+        r"是(?:的)?|对(?:的)?|有(?:的)?|没错|嗯(?:是的?|对的?|有)|"
+        r"(?:(?:是的?|对的?|嗯|有的?))?(?:就在现在|就现在|现在就有(?:危险)?|"
+        r"(?:我|我们)?(?:现在|此刻|眼下)(?:确实|的确)?(?:有危险|有人有危险|不安全)|"
+        r"(?:确实|真的)?有危险|有人正面临危险)",
+        answer))
 
 
 def _corrected_fact(text):
@@ -496,15 +546,27 @@ def _recall(text, history, memories, readable):
             return _reply("reflect", "neutral", f"你刚才说的是{day}。")
     if not readable:
         return _reply("clarify", "check_in", "现在暂时读不到保存的记录。", "你想从哪件事接着聊？")
-    if re.search(r"偏好|设置|语速|声音", text):
+    if re.fullmatch(r"(?:说话|播报)?语速(?:偏好|设置)?|(?:说话|播报)速度(?:偏好|设置)?", subject):
         for item in memories:
-            if item["kind"] == "preference" and _speed(_norm(item["text"])):
-                return _reply("clarify", "check_in", "目前能查到一条语速偏好。", "你指的是这件事吗？")
+            if item["kind"] == "preference":
+                rate = _stored_speech_rate(item["text"])
+                if rate:
+                    name = {"slow": "慢速", "normal": "正常", "fast": "快速"}[rate]
+                    return _reply("reflect", "neutral", f"你保存的语速偏好是{name}。")
+    if re.fullmatch(r"字幕(?:设置|开关|偏好)?", subject):
+        for item in memories:
+            if item["kind"] != "preference":
+                continue
+            value = _norm(item["text"]).strip("。.!！")
+            if re.fullmatch(r"(?:打开|开启|显示)字幕|字幕(?:打开|开启|显示)", value):
+                return _reply("reflect", "neutral", "你保存的偏好是开启字幕。")
+            if re.fullmatch(r"(?:关闭|关掉|隐藏)字幕|字幕(?:关闭|关掉|隐藏)", value):
+                return _reply("reflect", "neutral", "你保存的偏好是关闭字幕。")
     for item in memories:
         value = _norm(item["text"])
         if subject and subject not in value:
             continue
-        if item["kind"] == "preference" and _speed(value):
+        if item["kind"] == "preference" and _stored_speech_rate(value):
             return _reply("clarify", "check_in", "目前能查到一条语速偏好。", "你指的是这件事吗？")
         if item["kind"] == "follow_up":
             # Quote only a short noun-like subject, never an entire saved utterance.

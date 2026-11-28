@@ -92,9 +92,13 @@ def preference_slot(kind, text, key):
                 "语速", "说慢", "说快", "说话慢", "说话快", "慢点说", "快点说",
                 "正常速度说", "正常速度讲"))):
         return "voice_speed"
-    # "以后叫我小王"/"你就叫我小王" are the same slot as "叫我小王"; "别叫我老师"
-    # is a prohibition, not a new name, so it is left unslotted on purpose.
-    if not re.match(r"^(?:请)?别叫", value) and re.search(r"叫我|称呼我|(?:怎么|如何)称呼", value):
+    # Only a request to use a name should replace a confirmed address.
+    # Descriptions ("室友叫我老师") and reminders ("叫我起床") are separate items.
+    address = re.fullmatch(
+        r"(?:我希望[你您]?|以后|今后|从现在起|[你您](?:就|可以|以后|直接|还是)|请|麻烦|就|都|直接|还是)*"
+        r"(?:叫我|称呼我(?:为)?)\s*([^，。！？,!?；;]+)", value)
+    if address and not re.match(r"(?:(?:按时|准时|早点|记得|去)\s*)?(?:起床|吃饭|吃药|上课|开会|交作业|出门|回家)",
+                                address[1].strip()):
         return "address_name"
     if any(term in value for term in ("字幕", "字幕开关", "显示文字", "关掉字幕", "打开字幕")):
         return "subtitle"
@@ -134,6 +138,10 @@ CREATE TABLE IF NOT EXISTS conv_request_keys (
 CREATE TABLE IF NOT EXISTS conv_slot_order (
     uid TEXT, slot TEXT, last_source_order INTEGER NOT NULL, PRIMARY KEY(uid,slot)
 );
+CREATE TABLE IF NOT EXISTS conv_item_withdrawals (
+    uid TEXT, kind TEXT, item_hash TEXT, last_source_order INTEGER NOT NULL,
+    PRIMARY KEY(uid,kind,item_hash)
+);
 """
 
 
@@ -162,6 +170,7 @@ class MemoryStore:
     def _upgrade_sources(self, db):
         """One transaction adds a stable input order and reconciles v0 preferences."""
         if any(r["name"] == "accepted_order" for r in db.execute("PRAGMA table_info(conv_sources)")):
+            db.execute("CREATE UNIQUE INDEX IF NOT EXISTS conv_accepted_order ON conv_sources(accepted_order)")
             return
         db.execute("ALTER TABLE conv_sources ADD COLUMN accepted_order INTEGER")
         # Old sources were inserted on final-input acceptance and never replaced.
@@ -173,15 +182,17 @@ class MemoryStore:
         groups = {}
         rows = db.execute("""SELECT m.*, s.accepted_order FROM conv_memories m
             JOIN conv_sources s ON (s.uid,s.sid,s.turn)=(m.uid,m.sid,m.turn)
-            WHERE m.kind='preference' ORDER BY m.updated_at DESC, s.accepted_order DESC, m.rowid DESC""")
+            WHERE m.kind='preference'
+            ORDER BY (m.status='active' AND (m.expires_at IS NULL OR m.expires_at>?)) DESC,
+            m.updated_at DESC, s.accepted_order DESC, m.rowid DESC""", (self.clock(),))
         for row in rows:
             slot = row["slot"] or preference_slot("preference", row["text"], None)
             if slot is not None:
                 groups.setdefault((row["uid"], slot), []).append(row)
         for (uid, slot), records in groups.items():
             winner = records[0]
-            # Release the old unique index entry before putting a previously
-            # anonymous winner into this slot. Tombstones must not be revived.
+            # Deletion of one ID does not withdraw another still-valid confirmed
+            # ID. Release the old unique index entry before assigning its slot.
             for older in records[1:]:
                 if older["status"] == "active":
                     db.execute("""UPDATE conv_memories SET status='superseded',text=''
@@ -323,6 +334,15 @@ class MemoryStore:
         return db.execute("""SELECT * FROM conv_memories WHERE uid=? AND slot=? AND status='active'
             AND (expires_at IS NULL OR expires_at>?)""", (uid, slot, now)).fetchone()
 
+    @staticmethod
+    def _check_withdrawal(db, uid, sid, turn, kind, value):
+        blocked = db.execute("""SELECT 1 FROM conv_item_withdrawals w JOIN conv_sources s
+            ON s.uid=w.uid AND s.accepted_order<=w.last_source_order
+            WHERE w.uid=? AND w.kind=? AND w.item_hash=? AND s.sid=? AND s.turn=?""",
+            (uid, kind, digest(uid, kind, squash(value)), sid, turn)).fetchone()
+        if blocked:
+            raise conflict("这条授权早于用户撤回该事项，请从新的明确授权开始。")
+
     def _commit_record(self, db, uid, sid, turn, kind, value, slot, source, expires, now):
         if slot is not None:
             order = db.execute("SELECT accepted_order FROM conv_sources WHERE uid=? AND sid=? AND turn=?",
@@ -357,8 +377,8 @@ class MemoryStore:
             raise invalid("cmd 必须是对象。")
         op = required(cmd.get("op"), "op")
         req = required(cmd.get("request_id"), "request_id")
-        now = self.clock()
         with self._transaction(write=True) as db:
+            now = self.clock()
             if op in ("propose", "save"):
                 sid = required(cmd.get("session_id"), "session_id")
                 turn = required(cmd.get("source_turn_id"), "source_turn_id")
@@ -416,16 +436,18 @@ class MemoryStore:
                 raise conflict("草稿已处理。")
             if draft["expires_at"] is not None and draft["expires_at"] <= now:
                 raise missing()
+            self._check_withdrawal(db, uid, sid, turn, kind, value)
             return {"draft_id": ident}, 200
         if expires is not None and expires <= now:
             raise invalid("新记录已过期。")
+        # Verify the grant before looking up withdrawal state. Unapproved input
+        # must return the same authorization error for known and unknown items.
+        if op == "save" and (not src["authorized"] or not src["authorized_text"]
+                             or squash(src["authorized_text"]) != squash(value)):
+            raise DomainError(403, "SAVE_NOT_AUTHORIZED",
+                              "需从正式来源核实保存授权与原文，改写内容请先提交草稿。")
+        self._check_withdrawal(db, uid, sid, turn, kind, value)
         if op == "save":
-            # The grant is bound to the verified excerpt, not merely to the round
-            # containing "记住", so an explicitly excluded item cannot be stored.
-            if (not src["authorized"] or not src["authorized_text"]
-                    or squash(src["authorized_text"]) != squash(value)):
-                raise DomainError(403, "SAVE_NOT_AUTHORIZED",
-                                  "需从正式来源核实保存授权与原文，改写内容请先提交草稿。")
             result = self._commit_record(db, uid, sid, turn, kind, value, slot, "user_authorized", expires, now)
             ident = result["memory_id"]
             db.execute("UPDATE conv_sources SET authorized_text=NULL WHERE uid=? AND sid=? AND turn=?",
@@ -474,6 +496,9 @@ class MemoryStore:
                 raise conflict("草稿已用其他正文确认。")
             return {"memory_id": draft["memory_id"], "kind": draft["kind"], "text": value,
                     "revision": draft["confirmed_rev"]}, 200
+        self._check_withdrawal(db, uid, draft["sid"], draft["turn"], draft["kind"], draft["text"])
+        if value != draft["text"]:
+            self._check_withdrawal(db, uid, draft["sid"], draft["turn"], draft["kind"], value)
         current = self._slot(db, uid, draft["slot"], now)
         active_version = (current["id"], current["revision"]) if current else (None, None)
         if active_version != (draft["base_id"], draft["base_rev"]):
@@ -494,7 +519,17 @@ class MemoryStore:
         mid = row["id"]
         if op == "delete":
             if row["status"] != "deleted":
-                self._live(row, now)
+                # An owner may withdraw a retained, time-expired row. A
+                # compacted/superseded row has no actionable item left.
+                if row["status"] != "active":
+                    raise missing()
+                # An earlier matching grant may still be queued in another
+                # session. Only mark sources accepted through this withdrawal.
+                db.execute("""INSERT INTO conv_item_withdrawals(uid,kind,item_hash,last_source_order)
+                    SELECT ?,?,?,MAX(accepted_order) FROM conv_sources WHERE uid=?
+                    ON CONFLICT(uid,kind,item_hash) DO UPDATE SET
+                    last_source_order=MAX(last_source_order,excluded.last_source_order)""",
+                    (uid, row["kind"], digest(uid, row["kind"], squash(row["text"])), uid))
                 db.execute("UPDATE conv_memories SET status='deleted',text='',updated_at=? WHERE uid=? AND id=?",
                            (now, uid, mid))
                 db.execute("UPDATE conv_drafts SET text='',confirmed_text=NULL WHERE uid=? AND memory_id=?",

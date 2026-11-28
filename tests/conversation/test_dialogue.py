@@ -370,6 +370,43 @@ def test_R13_danger_routes_cover_named_and_unnamed_forms(text, route):
     assert service._route(text, []) == route
 
 
+def safety_question_history():
+    prompt = "我有时想伤害自己。"
+    check = generated(prompt)
+    assert check["intent"] == "clarify"
+    return ([{"role": "user", "text": prompt}] +
+            [{"role": "assistant", "text": sentence} for sentence in check["sentences"]])
+
+
+@pytest.mark.parametrize("answer", ["是的，就在现在。", "对，现在有危险。", "有。", "是的。", "我现在不安全。"])
+def test_affirmative_to_delivered_safety_question_immediately_offers_unassigned_help(sandbox, answer):
+    history = safety_question_history()
+    existing_approval = service.health()["crisis_text_approved"]
+    called = []
+    service.configure(store=sandbox, generator=lambda _: called.append(True), reviewer=lambda *_: True)
+    response = generated(answer, ctx=context(history=history, input_id="I2", turn_id="R2"))
+    text = clean_text(response)
+    assert not called
+    assert response["intent"] == "offer_option" and re.search("急救|紧急", text)
+    assert not re.search("自己受伤|伤到自己|和对方保持", text)
+    assert service.health()["crisis_text_approved"] == existing_approval
+
+
+@pytest.mark.parametrize("answer", ["不，现在没有危险。", "是的，以前是，现在安全了。",
+                                    "是的，我们来练习答辩吧。", "嗯。", "是吗？"])
+def test_denial_topic_change_or_ambiguous_ack_is_not_a_danger_confirmation(answer):
+    reply = generated(answer, ctx=context(history=safety_question_history(), input_id="I2", turn_id="R2"))
+    assert not re.search("立即联系当地|安全距离", clean_text(reply))
+
+
+def test_affirmative_binds_to_last_delivered_question_and_not_future_sessions():
+    history = safety_question_history()
+    history += [{"role": "user", "text": "没有，想聊聊答辩。"},
+                {"role": "assistant", "text": "你想先练开场吗？"}]
+    assert "急救" not in clean_text(generated("是的。", ctx=context(history=history)))
+    assert "急救" not in clean_text(generated("是的。", ctx=context(session_id="fresh")))
+
+
 @pytest.mark.parametrize("utterance", ["我现在要伤害我自己。", "我现在要伤害我的同学。"])
 def test_current_personal_danger_bypasses_remote_generation(sandbox, utterance):
     calls = []
@@ -556,3 +593,39 @@ def test_P3_closed_fixture_refuses_instead_of_reopening():
     with pytest.raises(DomainError) as exc:
         fixture.list_memories("demo-a")
     assert exc.value.status == 503 and exc.value.retryable
+
+
+@pytest.mark.parametrize(("persisted", "factor"), [("慢一点", 0.85), ("快一点", 1.15)])
+def test_canonical_rate_survives_file_reopen_and_only_responds_to_direct_requests(sandbox, tmp_path, persisted, factor):
+    save_from_input(context(), persisted, "preference")
+    sandbox.close()
+    reopened = MemoryStore(tmp_path / "conversation.sqlite")
+    try:
+        service.configure(store=reopened)
+        returning = context(session_id="return", input_id=None, turn_id="R0", background={"speech_rate": "normal"})
+        assert service.speech_rate_factor(returning) == factor
+        for narration in ("我今天走慢一点。", "他说慢一点。", "她说快一点。", "我同学讲话慢。"):
+            assert service.speech_rate_factor(returning, narration) == factor
+        assert service.speech_rate_factor(returning, "他说慢一点，不过请你说快一点。") == 1.15
+        assert service.speech_rate_factor(returning, "请你说慢一点。") == 0.85
+    finally:
+        reopened.close()
+
+
+def test_bare_speed_command_is_distinct_from_reported_and_unrelated_content():
+    assert service.speech_rate_factor(context(background={"speech_rate": "慢一点"})) == 0.85
+    assert service.speech_rate_factor(context(), "慢一点") == 0.85
+    assert service.speech_rate_factor(context(), "他说慢一点。") == 1.0
+    assert service.speech_rate_factor(context(), "他说，慢一点。") == 1.0
+    assert service.speech_rate_factor(context(), "别快走。") == 1.0
+    save_from_input(context(), "慢一点", "follow_up")
+    assert service.speech_rate_factor(context()) == 1.0
+
+
+def test_caption_setting_cannot_fall_back_to_unrelated_speech_preference():
+    save_from_input(context(), "慢一点", "preference")
+    question = "我的字幕设置是什么？"
+    assert "语速" not in clean_text(generated(question))
+    save_from_input(context(turn_id="R2", input_id="I2"), "关闭字幕", "preference")
+    assert "关闭字幕" in clean_text(generated(question))
+    assert "慢速" in clean_text(generated("我的语速偏好是什么？"))

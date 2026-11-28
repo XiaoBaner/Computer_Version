@@ -2,6 +2,8 @@
 from io import BytesIO
 import json
 import pytest
+from conversation import service
+from conversation.fixture_memory import DictMemoryStore
 from conversation.provider import ChatProvider
 
 
@@ -34,6 +36,25 @@ def test_review_requires_an_unambiguous_boolean(result):
     p = ChatProvider("https://example.test/v1/chat/completions", "fixture",
                      transport=lambda *a, **kw: envelope(result))
     assert not p.review({}, {})
+
+
+@pytest.mark.parametrize("decision", ['{"allow":false,"allow":true}', '{"allow":true,"allow":false}'])
+def test_conflicting_review_fields_are_not_delivered(decision, monkeypatch):
+    candidate = {"intent": "listen", "sentences": ["候选标记。"],
+                 "voice_style": "neutral", "memory_draft": None}
+    raw = json.dumps({"choices": [{"message": {"content": decision}}]}).encode()
+    provider = ChatProvider("http://localhost:8000/v1/chat/completions", "fixture",
+                            transport=lambda *a, **kw: BytesIO(raw))
+    monkeypatch.setattr(service, "_runtime", None)
+    store = DictMemoryStore()
+    try:
+        service.configure(store=store, generator=lambda _ctx: candidate, reviewer=provider.review)
+        ctx = dict(user_id="demo", session_id="S1", turn_id="R1", input_id="I1",
+                   background={}, history=[])
+        reply = service.respond(ctx, "我想聊聊今天的安排。", lambda: False)
+        assert reply["sentences"] != candidate["sentences"]
+    finally:
+        store.close()
 
 
 def test_plain_http_external_endpoint_is_rejected():

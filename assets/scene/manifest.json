@@ -1,0 +1,25 @@
+{
+  "canvas": {
+    "width": 1672,
+    "height": 941
+  },
+  "room": "listening-room-v1/room.png",
+  "window": "listening-room-v1/window.png",
+  "presets": {
+    "default": {
+      "lighting": "listening-room-v1/lighting/default.png",
+      "ambient": "listening-room-v1/ambience/default.wav",
+      "gain": 0.14
+    },
+    "quiet": {
+      "lighting": "listening-room-v1/lighting/quiet.png",
+      "ambient": "listening-room-v1/ambience/quiet.wav",
+      "gain": 0.045
+    },
+    "practice": {
+      "lighting": "listening-room-v1/lighting/practice.png",
+      "ambient": "listening-room-v1/ambience/practice.wav",
+      "gain": 0.11
+    }
+  }
+}

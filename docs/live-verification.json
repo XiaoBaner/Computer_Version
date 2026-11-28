@@ -1,0 +1,59 @@
+{
+  "browser": "Edg/158.0.4370.33",
+  "platform": "win32",
+  "normal": [
+    {
+      "turn": "R1",
+      "startMs": 1901,
+      "endMs": 8214
+    },
+    {
+      "turn": "R2",
+      "startMs": 8791,
+      "endMs": 15115
+    }
+  ],
+  "interruptions": [
+    {
+      "turn": "R3",
+      "source": "interrupt_button",
+      "gapUpperMs": 44.4,
+      "audioStopMs": 15346.092999988081,
+      "mouthFirstFrameMs": 15301.7,
+      "mouthFrameMs": 15314.1,
+      "droppedLateFrames": 88
+    },
+    {
+      "turn": "R4",
+      "source": "interrupt_button",
+      "gapUpperMs": 41.6,
+      "audioStopMs": 15567.400333285648,
+      "mouthFirstFrameMs": 15525.8,
+      "mouthFrameMs": 15532.1,
+      "droppedLateFrames": 88
+    },
+    {
+      "turn": "R5",
+      "source": "interrupt_button",
+      "gapUpperMs": 45,
+      "audioStopMs": 15755.804666654745,
+      "mouthFirstFrameMs": 15710.796,
+      "mouthFrameMs": 15719.9,
+      "droppedLateFrames": 88
+    }
+  ],
+  "silentGreeting": true,
+  "cameraUnavailable": true,
+  "scene": {
+    "from": "default",
+    "to": "practice",
+    "durationMs": 650,
+    "observedDuringFade": {
+      "opacity": 0.178822,
+      "beforeGain": 0.0634966567158699,
+      "afterGain": 0.025268252938985825
+    }
+  },
+  "mutedReply": true,
+  "reconnectWithoutRepeatedGreeting": true
+}

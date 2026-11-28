@@ -1,0 +1,113 @@
+{
+  "canvas": {
+    "width": 1086,
+    "height": 1448
+  },
+  "anchors": {
+    "head": {
+      "x": 546,
+      "y": 442
+    },
+    "left_eye": {
+      "x": 477,
+      "y": 364
+    },
+    "right_eye": {
+      "x": 613,
+      "y": 363
+    },
+    "left_mouth_corner": {
+      "x": 491,
+      "y": 512
+    },
+    "right_mouth_corner": {
+      "x": 602,
+      "y": 510
+    }
+  },
+  "concept": "psyche-v1/concept.png",
+  "expression_sheet": "psyche-v1/expression-sheet.png",
+  "base_layers": {
+    "body": "psyche-v1/layers/body.png",
+    "head": "psyche-v1/layers/head.png",
+    "left_brow": "psyche-v1/layers/left-brow.png",
+    "right_brow": "psyche-v1/layers/right-brow.png",
+    "pupils": "psyche-v1/layers/pupils.png"
+  },
+  "expressions": {
+    "neutral": {
+      "reference": "psyche-v1/references/neutral.png",
+      "layers": {},
+      "transition_ms": 240
+    },
+    "attentive": {
+      "reference": "psyche-v1/references/attentive.png",
+      "layers": {
+        "left_brow": "psyche-v1/expressions/attentive/left-brow.png",
+        "right_brow": "psyche-v1/expressions/attentive/right-brow.png",
+        "pupils": null
+      },
+      "eyelids": {
+        "open": "psyche-v1/expressions/attentive/eyes-open.png"
+      },
+      "transition_ms": 240
+    },
+    "concern": {
+      "reference": "psyche-v1/references/concern.png",
+      "layers": {
+        "left_brow": "psyche-v1/expressions/concern/left-brow.png",
+        "right_brow": "psyche-v1/expressions/concern/right-brow.png",
+        "pupils": null
+      },
+      "eyelids": {
+        "open": "psyche-v1/expressions/concern/eyes-open.png"
+      },
+      "transition_ms": 280
+    },
+    "thoughtful": {
+      "reference": "psyche-v1/references/thoughtful.png",
+      "layers": {
+        "pupils": null
+      },
+      "eyelids": {
+        "open": "psyche-v1/expressions/thoughtful/eyes-open.png"
+      },
+      "transition_ms": 300
+    },
+    "clarify": {
+      "reference": "psyche-v1/references/clarify.png",
+      "layers": {
+        "right_brow": "psyche-v1/expressions/clarify/right-brow.png"
+      },
+      "transition_ms": 220
+    },
+    "relief": {
+      "reference": "psyche-v1/references/relief.png",
+      "layers": {},
+      "mouths": {
+        "closed": "psyche-v1/expressions/relief/mouth-closed.png"
+      },
+      "transition_ms": 300
+    },
+    "interrupted": {
+      "reference": "psyche-v1/references/interrupted.png",
+      "layers": {},
+      "mouths": {
+        "closed": "psyche-v1/mouths/pressed.png"
+      },
+      "transition_ms": 160
+    }
+  },
+  "eyelids": {
+    "open": "psyche-v1/eyelids/open.png",
+    "half": "psyche-v1/eyelids/half.png",
+    "closed": "psyche-v1/eyelids/closed.png"
+  },
+  "mouths": {
+    "closed": "psyche-v1/mouths/closed.png",
+    "slightly_open": "psyche-v1/mouths/slightly_open.png",
+    "wide": "psyche-v1/mouths/wide.png",
+    "round": "psyche-v1/mouths/round.png",
+    "pressed": "psyche-v1/mouths/pressed.png"
+  }
+}

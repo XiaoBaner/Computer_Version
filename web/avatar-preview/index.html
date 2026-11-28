@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>2D 数字人本地预览</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/web/avatar-preview/preview.css">
+  <script type="module" src="/web/avatar-preview/preview.mjs"></script>
+</head>
+<body data-mode="preview">
+  <header class="page-header">
+    <div>
+      <p class="project">普绪喀的回信</p>
+      <h1>2D 数字人本地预览</h1>
+    </div>
+    <output id="assets-status" aria-live="polite">正在读取素材清单…</output>
+  </header>
+  <main>
+    <section class="stage-panel" aria-label="预览画面">
+      <div id="stage" data-scene="default">
+        <div class="stage-room"></div>
+        <canvas id="avatar" role="img" aria-label="角色和锚点预览"></canvas>
+        <div id="stage-status" class="stage-status"></div>
+      </div>
+      <div class="captions">
+        <span class="project">字幕</span>
+        <p id="caption" aria-live="polite">等待预览</p>
+      </div>
+      <p id="notice" role="status" hidden></p>
+    </section>
+    <section class="controls" aria-label="预览控制">
+      <div id="live-controls" hidden>
+        <p id="connection-status" class="hint" role="status">等待会话连接</p>
+        <form id="conversation-form">
+          <label for="conversation-input">给普绪喀发消息</label>
+          <div class="conversation-row">
+            <input id="conversation-input" maxlength="500" autocomplete="off" required>
+            <button id="send-text" type="submit" disabled>发送</button>
+          </div>
+        </form>
+        <div class="buttons">
+          <button id="interrupt" type="button" disabled>打断</button>
+          <button id="reconnect" type="button" hidden>重新连接</button>
+        </div>
+        <div class="checks">
+          <label><input id="speech-output" type="checkbox" disabled> 对白声音</label>
+          <label id="microphone-option" hidden><input id="microphone" type="checkbox"> 麦克风</label>
+          <label id="camera-option" hidden><input id="camera" type="checkbox"> 摄像头</label>
+          <label><input id="scene-lock" type="checkbox"> 锁定场景</label>
+        </div>
+        <p id="device-status" class="hint" role="status"></p>
+        <p id="transcript" class="hint" aria-live="polite" hidden></p>
+        <video id="observation-video" muted playsinline hidden></video>
+        <details class="session-details">
+          <summary>联调时间轴</summary>
+          <output id="timing-output" aria-live="polite"></output>
+          <ol id="live-trace"></ol>
+        </details>
+      </div>
+      <div id="offline-mode">
+        <label for="scenario">预览模式</label>
+        <select id="scenario" disabled>
+          <option value="">手动预览</option>
+        </select>
+      </div>
+      <div id="manual-controls" class="select-grid">
+        <label>对话状态<select id="state" disabled></select></label>
+        <label>表情<select id="expression" disabled></select></label>
+        <label>眼睑<select id="eyelid" disabled></select></label>
+        <label>嘴型<select id="mouth" disabled></select></label>
+        <label>场景<select id="scene" disabled></select></label>
+      </div>
+      <div class="checks">
+        <label><input id="anchors" type="checkbox" checked> 显示锚点</label>
+        <label id="reference-option"><input id="reference" type="checkbox"> 显示表情参考图</label>
+        <label><input id="ambient" type="checkbox" disabled> 环境声</label>
+      </div>
+      <dl id="anchor-coordinates" aria-label="锚点坐标"></dl>
+      <a id="expression-sheet" hidden target="_blank" rel="noopener">查看表情对照板</a>
+      <p id="ambient-status" class="hint" role="status" hidden></p>
+      <div id="replay-controls" hidden>
+        <p class="hint">离线样例 · 模拟播放时钟</p>
+        <div class="buttons">
+          <button id="play" type="button">自动回放</button>
+          <button id="step" type="button">下一帧</button>
+          <button id="reset" type="button">重置</button>
+        </div>
+        <p id="progress" class="progress" role="status"></p>
+        <ol id="trace" aria-label="协议事件"></ol>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

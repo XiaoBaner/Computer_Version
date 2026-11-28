@@ -183,7 +183,9 @@ def test_M21_memory_io_requires_an_injected_store():
     service.configure()
     assert service.opening(context(input_id=None, turn_id="R0"))["sentences"]
     for call in (lambda: service.list_memories("demo-a"),
-                 lambda: service.apply_memory("demo-a", {"op": "delete", "memory_id": "M1"})):
+                 lambda: service.apply_memory("demo-a", {"op": "delete", "memory_id": "M1"}),
+                 lambda: service.record_source(context(), "记住语速慢一点。", save_authorized=True,
+                                               authorized_text="语速慢一点")):
         with pytest.raises(DomainError) as exc:
             call()
         assert exc.value.status == 503 and exc.value.retryable
@@ -315,11 +317,32 @@ def test_G17_safety_sentences_come_from_the_policy_file():
 
 
 def test_R11b_correction_never_reads_a_diagnosis_aloud():
-    """回显也是出口：不能把病名、药名、链接念出去。"""
-    text = clean_text(generated("我说错了，不是抑郁症，是焦虑症。"))
-    assert "焦虑" not in text and "抑郁" not in text
-    link = clean_text(generated("我说错了，不是那个链接，是http://x.co"))
-    assert "http" not in link.lower()
+    """回显也是出口：不能把病名、药名、剂量、链接念出去。"""
+    for text in ("我说错了，不是抑郁症，是焦虑症。",
+                 "我说错了，不是周四，是焦虑。",
+                 "我说错了，不是周四，是精神病。",
+                 "我说错了，不是周四，是每天吃安眠药。",
+                 "我说错了，不是周四，是每周吃三颗。",
+                 "我说错了，不是周四，是http://x.co"):
+        spoken = clean_text(generated(text))
+        assert not re.search(r"焦虑|抑郁|精神病|安眠|颗|http", spoken), (text, spoken)
+
+
+@pytest.mark.parametrize("text", [
+    "我说错了，不是周四，是大概周五。",
+    "我说错了，不是周四，是可能周五。",
+    "我说错了，不是周四，是周五吧。",
+])
+def test_R11c_hedged_correction_is_not_echoed_as_fact(text):
+    spoken = clean_text(generated(text))
+    assert "大概" not in spoken and "可能" not in spoken and "周五吧" not in spoken
+
+
+def test_R11d_correction_accepts_space_and_semicolon_separators():
+    for text in ("我说错了，不是周四 是周五。", "我说错了，不是周四；是周五。"):
+        assert "周五" in clean_text(generated(text))
+    # 食物里的"片"不是剂量，不能被误杀
+    assert "面包片" in clean_text(generated("我说错了，不是周四，是面包片。"))
 
 
 def test_R12_welcome_turn_cannot_be_answered_as_input():
@@ -396,10 +419,65 @@ def test_recall_uses_latest_committed_user_date_in_session_only(sandbox, last_da
     ("我最近慢热", None),
     ("我很快乐", None),
     ("快考试了", None),
+    ("慢一点", "slow"),
+    ("再快一点", "fast"),
+    ("我走快一点", None),
+    ("快点吃饭", None),
+    ("别快说", "slow"),
+    ("别慢点说", "fast"),
+    ("能不能快一点", "fast"),
+    ("可不可以慢一点", "slow"),
+    ("别那么慢", "fast"),
+    ("再慢点点", "slow"),
 ])
 def test_R14_speed_follows_speech_not_life(text, expected):
-    """走路慢、慢热、快乐都不是"说话慢"。"""
+    """走路慢、慢热、快乐都不是"说话慢"；裸"慢一点"仍要说慢；"别快说"是放慢。"""
     assert service._speed(text) is expected
+
+
+def test_R16_saved_bare_speed_preference_survives_restart(tmp_path):
+    """保存的"慢一点"必须在重开库后仍然生效，不能存得下却不生效。"""
+    db = tmp_path / "speed.sqlite"
+    first = context()
+    service.configure(store=MemoryStore(db))
+    service.record_source(first, "记住，慢一点。", save_authorized=True, authorized_text="慢一点")
+    service.apply_memory(first["user_id"], {
+        "op": "save", "kind": "preference", "value": "慢一点", "session_id": "session-1",
+        "source_turn_id": "R1", "request_id": "bare-speed"})
+    store = MemoryStore(db)
+    service.configure(store=store)
+    try:
+        assert service.speech_rate(context(session_id="session-2")) == "slow"
+        assert service.speech_rate_factor(context(session_id="session-2")) == 0.85
+    finally:
+        store.close()
+
+
+def test_R17_recall_answers_question_variants_instead_of_denying(tmp_path):
+    """同一个待办，换个问法不能答"缺少记录"；问偏好要能查回语速。"""
+    store = MemoryStore(tmp_path / "recall.sqlite")
+    service.configure(store=store)
+    try:
+        base = context(turn_id="R1")
+        service.record_source(base, "记住，语速慢一点。", save_authorized=True,
+                              authorized_text="语速慢一点")
+        service.apply_memory(base["user_id"], {
+            "op": "save", "kind": "preference", "value": "语速慢一点",
+            "session_id": "session-1", "source_turn_id": "R1", "request_id": "recall-speed"})
+        second = context(turn_id="R2", input_id="I2")
+        service.record_source(second, "记住，下次练答辩。", save_authorized=True,
+                              authorized_text="下次练答辩")
+        service.apply_memory(second["user_id"], {
+            "op": "save", "kind": "follow_up", "value": "下次练答辩",
+            "session_id": "session-1", "source_turn_id": "R2", "request_id": "recall-todo"})
+        for question in ("记得我上次要练什么吗？", "记得我上次要练的是什么吗？", "上次练什么？"):
+            answer = " ".join(service.respond(context(turn_id="R3"), question, lambda: False)["sentences"])
+            assert "答辩" in answer and "缺少" not in answer, (question, answer)
+        pref = " ".join(service.respond(context(turn_id="R4"), "我的语速偏好是什么？",
+                                        lambda: False)["sentences"])
+        assert "语速偏好" in pref, pref
+    finally:
+        store.close()
 
 
 def test_R15_speech_rate_factor_is_numeric_for_tts(sandbox):
@@ -425,7 +503,7 @@ def test_P1_safety_template_is_validated_at_startup():
 
     too_long = copy.deepcopy(_policy())
     too_long["safety"]["urgent"]["sentences"] = ["呼" * 61]
-    with pytest.raises(ValueError, match="单句长度"):
+    with pytest.raises(ValueError, match="短句协议"):
         service._validate_policy(too_long)
 
     forbidden = copy.deepcopy(_policy())
@@ -444,10 +522,28 @@ def test_P1_safety_template_is_validated_at_startup():
         service._validate_policy(enum)
 
 
+@pytest.mark.parametrize(("sentences", "why"), [
+    (["建议 购买助眠产品。"], "空格拆词"),
+    (["建議購買助眠產品。"], "繁体"),
+    (["建议\u200b购买助眠产品。"], "零宽字符"),
+    (["建议", "购买助眠产品。"], "跨句拆分"),
+    (["建议购买。请立即下单。"], "单条双句号"),
+    (["你还好吗？要不要买？"], "单条两个问句"),
+])
+def test_P1b_safety_word_list_cannot_be_split_or_spaced(sentences, why):
+    import copy
+    policy = copy.deepcopy(_policy())
+    policy["safety"]["boundary"]["sentences"] = sentences
+    with pytest.raises(ValueError):
+        service._validate_policy(policy)
+
+
 def test_P2_health_reports_whether_crisis_text_is_approved():
     service.configure()
     status = service.health()
-    assert isinstance(status["crisis_text_approved"], bool)
+    assert status["crisis_text_approved"] == bool(
+        _policy()["safety"].get("approval", {}).get("by")
+        and _policy()["safety"].get("approval", {}).get("on"))
     assert status["policy_version"] == "weekend-v1"
     assert status["memory_ready"] is False
 

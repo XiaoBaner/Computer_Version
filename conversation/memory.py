@@ -47,6 +47,14 @@ def required(value, key):
     return value.strip()
 
 
+def body(value):
+    """A stored memory item is a short phrase, not a paragraph."""
+    text = required(value, "value")
+    if len(text) > 300 or any(unicodedata.category(ch).startswith("C") for ch in text):
+        raise invalid("记忆正文必须为 1–300 字且不含控制字符。")
+    return text
+
+
 def identity(user_id):
     if not isinstance(user_id, str) or not user_id.strip():
         raise DomainError(401, "UNAUTHENTICATED", "请重新建立会话。")
@@ -78,12 +86,15 @@ def preference_slot(kind, text, key):
     if kind != "preference":
         return None
     value = text.strip("，。！？,.!? ")
-    if value in {"慢一点", "快一点", "按正常速度", "按正常速度就行", "正常速度"} or any(
-            term in value for term in (
+    if (value in {"慢一点", "快一点", "按正常速度", "按正常速度就行", "正常速度"}
+            or re.fullmatch(r"(?:再|稍微|请|麻烦)?(?:慢|快)(?:一点|点|一些|些|儿)?", value)
+            or any(term in value for term in (
                 "语速", "说慢", "说快", "说话慢", "说话快", "慢点说", "快点说",
-                "正常速度说", "正常速度讲")):
+                "正常速度说", "正常速度讲"))):
         return "voice_speed"
-    if re.search(r"^(?:请)?叫我|^称呼我|(?:怎么|如何)称呼", value):
+    # "以后叫我小王"/"你就叫我小王" are the same slot as "叫我小王"; "别叫我老师"
+    # is a prohibition, not a new name, so it is left unslotted on purpose.
+    if not re.match(r"^(?:请)?别叫", value) and re.search(r"叫我|称呼我|(?:怎么|如何)称呼", value):
         return "address_name"
     if any(term in value for term in ("字幕", "字幕开关", "显示文字", "关掉字幕", "打开字幕")):
         return "subtitle"
@@ -256,6 +267,10 @@ class MemoryStore:
             grant = required(authorized_text, "authorized_text")
             if squash(grant) not in squash(original):
                 raise invalid("授权片段必须来自本轮原话。")
+            # "别记今天失眠" is an exclusion, never a grant: accepting it would let
+            # the very thing the user refused be stored verbatim.
+            if re.search(r"(别|不要|不用|无需|不需要|不准)(?:再)?(?:记|保存|存|写)", squash(grant)):
+                raise invalid("授权片段不能是用户要求排除的内容。")
         fingerprint = digest(original)
         with self._transaction(write=True) as db:
             existing = db.execute("""SELECT * FROM conv_sources WHERE uid=? AND sid=?
@@ -378,7 +393,7 @@ class MemoryStore:
         if kind not in ("preference", "follow_up"):
             raise invalid("未知记忆类型。")
         field = "text" if op == "propose" else "value"
-        value = required(cmd.get(field), field)
+        value = body(cmd.get(field))
         expires = cmd.get("expires_at")
         if expires is not None and (type(expires) not in (int, float) or not math.isfinite(expires)):
             raise invalid("expires_at 必须是有限 Unix 秒数。")
@@ -453,7 +468,7 @@ class MemoryStore:
             self._live(self._load(db, uid, draft["memory_id"]), now)
         elif draft["expires_at"] is not None and draft["expires_at"] <= now:
             raise missing()
-        value = required(cmd.get("value", draft["text"]), "value")
+        value = body(cmd.get("value", draft["text"]))
         if state == "confirmed":
             if value != draft["confirmed_text"]:
                 raise conflict("草稿已用其他正文确认。")
@@ -498,7 +513,7 @@ class MemoryStore:
             raise invalid("expected_revision 必须是正整数。")
         if rev != row["revision"]:
             raise DomainError(409, "REVISION_CONFLICT", "记忆已更新，请刷新后重试。")
-        value = required(cmd.get("value"), "value")
+        value = body(cmd.get("value"))
         if preference_slot(row["kind"], row["text"], None) != preference_slot(row["kind"], value, None):
             raise invalid("要改为其他偏好类别，请单独创建并确认该项。")
         db.execute("""UPDATE conv_memories SET text=?,revision=revision+1,source='user_edited',updated_at=?

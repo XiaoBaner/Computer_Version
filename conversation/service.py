@@ -73,7 +73,8 @@ SAFETY_ROUTES = ("urgent", "urgent_medical", "urgent_others", "safety_check",
 #: boundary leak. Only unambiguous instructions are listed: "不要自行停药" is a
 #: correct sentence and must not be rejected for containing 停药.
 FORBIDDEN_SAFETY_WORDS = ("建议购买", "可以吃", "加一片", "保证没事",
-                          "你患有", "确诊为", "继续练")
+                          "你患有", "确诊为", "继续练",
+                          "建議購買", "購買", "保證沒事", "確診為")
 
 _runtime = None
 _config_lock = threading.RLock()
@@ -109,11 +110,23 @@ def _validate_policy(policy):
         if (not isinstance(sentences, list) or not 1 <= len(sentences) <= policy["max_sentences"]
                 or any(not isinstance(s, str) or not s.strip() for s in sentences)):
             raise ValueError(f"safety[{route}] 缺少合法短句")
+        # The same structure gate as model output: one sentence, one terminal mark,
+        # at most one question in the whole entry. NFKC + whitespace stripping stops
+        # "建议 购买" / "建議購買" / zero-width from sneaking past the word list.
+        candidate = dict(intent=entry["intent"], voice_style=entry["voice_style"],
+                         sentences=sentences, memory_draft=None)
+        if _invalid_candidate(candidate, policy):
+            raise ValueError(f"safety[{route}] 不符合短句协议")
         for sentence in sentences:
-            if len(sentence) > policy["max_chars_per_sentence"]:
-                raise ValueError(f"safety[{route}] 超出单句长度")
-            if any(word in sentence for word in FORBIDDEN_SAFETY_WORDS):
+            flat = re.sub(r"\s+", "", unicodedata.normalize("NFKC", sentence))
+            flat = re.sub(r"[\u200b-\u200f\u2060\ufeff]", "", flat)
+            if any(word in flat for word in FORBIDDEN_SAFETY_WORDS):
                 raise ValueError(f"safety[{route}] 含越界措辞")
+        # Splitting "建议购买" across two sentences must not defeat the word list.
+        joined = re.sub(r"\s+", "", unicodedata.normalize("NFKC", "".join(sentences)))
+        joined = re.sub(r"[\u200b-\u200f\u2060\ufeff]", "", joined)
+        if any(word in joined for word in FORBIDDEN_SAFETY_WORDS):
+            raise ValueError(f"safety[{route}] 含越界措辞")
 
 
 def health() -> dict:
@@ -205,10 +218,10 @@ def record_source(ctx, text, *, save_authorized=False, authorized_text=None):
     history or model output.
     """
     _check_ctx(ctx, require_input=True)
-    return _config().store.record_source(ctx["user_id"], ctx["session_id"], ctx["turn_id"],
-                                         ctx["input_id"], text,
-                                         save_authorized=save_authorized,
-                                         authorized_text=authorized_text)
+    return _durable_store().record_source(ctx["user_id"], ctx["session_id"], ctx["turn_id"],
+                                          ctx["input_id"], text,
+                                          save_authorized=save_authorized,
+                                          authorized_text=authorized_text)
 
 
 def _read_for_reply(ctx):
@@ -233,10 +246,21 @@ def _speed(text):
         return "slow"
     if re.search(r"(?:你(?:说话|讲话|说得|讲得)|你的语速)(?:有点|太|过于)慢", text):
         return "fast"
+    # "别快说" / "别慢点说" / "别那么慢" ask for the opposite of the word they contain.
+    if re.search(r"(?:别|不要|不用|不必)(?:再)?(?:那么|这么|太)?(?:说得?|讲得?)?快", text):
+        return "slow"
+    if re.search(r"(?:别|不要|不用|不必)(?:再)?(?:那么|这么|太)?(?:说得?|讲得?)?慢", text):
+        return "fast"
     if re.search(r"(?:说|讲|语速)(?:得|再|能不能|可以)?快|快(?:一点|点|一些|些)?(?:儿)?(?:说|讲)|加快语速", text):
         return "fast"
     if re.search(r"(?:说|讲|语速)(?:得|再|能不能|可以)?慢|慢(?:一点|点|一些|些)?(?:儿)?(?:说|讲)|放慢语速", text):
         return "slow"
+    # A short bare "慢一点/再快一点" is about our voice in this app, but the same
+    # words describe walking or eating ("我走快一点"), so motion verbs exclude it.
+    # Saved preferences use this path too: "慢一点" must keep working after restart.
+    if len(text) <= 8 and not re.search(r"走|跑|开|骑|写|吃|喝|做|干|来|去|挪|搬|赶", text):
+        if re.fullmatch(r"(?:能不能|可不可以|可以|能|再|稍微|请|麻烦)?(?:慢|快)(?:一点|点|一些|些|点儿|点点|些些)?", text):
+            return "slow" if "慢" in text else "fast"
     return None
 
 
@@ -360,6 +384,8 @@ def _route(text, history):
         return "memory"
     if re.search(r"你(?:还)?记得|还记得|记得.{0,8}(吗|么)|我上次|上回.{0,6}(说|聊)|我们上次|上次.{0,10}(什么|哪|记)|之前.{0,6}(提|说).{0,5}(什么|谁|哪)", t):
         return "recall"
+    if re.search(r"(?:我的?)?(?:语速|声音|偏好|设置)(?:是什么|是啥|有哪些|怎么样|吗|呢)", t):
+        return "recall"
     if _DAY_QUESTION.search(t) and history and _recalled_weekday(_recall_subject(t), history):
         return "recall"
     if _speed(t):
@@ -388,17 +414,23 @@ def _corrected_fact(text):
     A fact that names an illness, a drug or a URL is refused outright — echoing
     "不是抑郁症，是焦虑症" would make the module say a diagnosis out loud.
     """
-    t = _norm(text)
+    t = unicodedata.normalize("NFKC", text).lower()  # keep spaces: they separate clauses
     for pattern, group in (
-            (r"不是(.{1,20}?)[，,、]\s*(?:而)?是(.{1,16})", 2),
-            (r"(?:改成|改到|应该是|其实是|应该是说)(.{1,16})", 1)):
+            (r"不是(.{1,20}?)[，,、;；\s]\s*(?:而)?是(.{1,16})(?=[。！？!?，,、;；\s]|$)", 2),
+            (r"(?:改成|改到|应该是|其实是|应该是说)(.{1,16})(?=[。！？!?，,、;；\s]|$)", 1)):
         match = re.search(pattern, t)
         if not match:
             continue
         fact = match.group(group).strip("。！？，、,.!? ")
-        if not fact or re.search(r"因为|所以|如果|要是|什么|哪个", fact):
+        if not fact:
             continue
-        if re.search(r"抑郁|焦虑症|双相|精神分裂|人格障碍|强迫|确诊|处方|剂量|毫克|片|自杀|自残|http|www", fact):
+        # Hedged or unresolved Y is not a fact: "大概是周五" must not be echoed.
+        if re.search(r"因为|所以|如果|要是|什么|哪个|谁|哪儿|几点|可能|大概|也许|好像|似乎|吧|吗", fact):
+            continue
+        # Never read an illness, a drug or a link aloud; a number+unit dose counts.
+        if re.search(r"抑郁|焦虑|双相|精神分裂|精神病|人格障碍|强迫|确诊|处方|剂量|毫克|"
+                     r"安眠|安定|褪黑素|吃药|服药|用药|自杀|自残|http|www|"
+                     r"[0-9一二三四五六七八九十两半几]+(?:片|颗|粒|毫克|毫升)", fact):
             continue
         return fact
     return ""
@@ -415,8 +447,10 @@ def _recall_subject(text):
         r"^(?:你还记不记得|你?还?记得|我们|咱们|我|跟你|刚才|刚刚|上次|上回|之前|先前|"
         r"提过的?|提到的?|说过的?|说的|聊过的?|谈过的?|关于|那个|这个|那件|那句|"
         r"想聊|要练|想练|接着练|接着聊|聊了|说了)+", "", query)
-    return re.sub(r"(?:安排在|安排|日期|时间|定在|是在|是|星期几|礼拜几|周几|哪一?天|"
-                  r"什么|哪件事|的话题|话题|的问题|问题|吗|呢|啊)+$", "", query)
+    cleaned = re.sub(r"(?:安排在|安排|日期|时间|定在|是在|是|星期几|礼拜几|周几|哪一?天|"
+                     r"什么|哪件事|的话题|话题|的问题|问题|吗|呢|啊)+$", "", query)
+    # "记得我上次要练的是什么吗" leaves "的是"; "我的语速偏好" leaves 的+是.
+    return re.sub(r"^(?:的|是|那个|这件|这件事)+|(?:的|是)+$", "", cleaned)
 
 
 def _recalled_weekday(subject, history):
@@ -462,6 +496,10 @@ def _recall(text, history, memories, readable):
             return _reply("reflect", "neutral", f"你刚才说的是{day}。")
     if not readable:
         return _reply("clarify", "check_in", "现在暂时读不到保存的记录。", "你想从哪件事接着聊？")
+    if re.search(r"偏好|设置|语速|声音", text):
+        for item in memories:
+            if item["kind"] == "preference" and _speed(_norm(item["text"])):
+                return _reply("clarify", "check_in", "目前能查到一条语速偏好。", "你指的是这件事吗？")
     for item in memories:
         value = _norm(item["text"])
         if subject and subject not in value:
@@ -470,7 +508,10 @@ def _recall(text, history, memories, readable):
             return _reply("clarify", "check_in", "目前能查到一条语速偏好。", "你指的是这件事吗？")
         if item["kind"] == "follow_up":
             # Quote only a short noun-like subject, never an entire saved utterance.
-            topic = subject or re.sub(r"^(?:下次)?(?:接着|继续|想|要)?(?:练习|聊聊|练|聊)", "", value)
+            # A one-character subject ("上次练什么" → "练") cannot stand alone, so
+            # fall back to the saved action word instead of claiming no record.
+            topic = subject if len(subject) >= 2 else ""
+            topic = topic or re.sub(r"^(?:下次)?(?:接着|继续|想|要)?(?:练习|聊聊|练|聊)", "", value)
             topic = topic.strip("。.!！")
             if re.fullmatch(r"[\u4e00-\u9fffA-Za-z0-9]{2,12}", topic) and _route(topic, []) == "listen":
                 return _reply("clarify", "check_in", f"有一条关于{topic}的待办。", "想从这里接着聊吗？")

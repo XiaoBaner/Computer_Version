@@ -47,7 +47,7 @@ def configure_dialogue(instance_path):
 
 ## 授权保存与记忆 HTTP 映射
 
-Flask 根据已认证用户的正式输入识别授权，绑定到具体 `session_id`、`source_turn_id`、`input_id` 和一个明确事项。例如原话“记住语速慢一点，别记今天失眠。”仅能登记 `save_authorized=True, authorized_text="语速慢一点"`。随后 `save` 使用同一事项的 `value="语速慢一点"`。调用方应传完整授权原句片段；按 NFKC 归一化并忽略空白来比较完整事项，保留否定词、限制语和适用对象。改写、归纳、授权不清或一轮里有多件难以区分的事项时，提交可编辑草稿让用户确认。仅凭旧记忆、模型猜测或视觉观察不构成新的写入授权。
+Flask 根据已认证用户的正式输入识别授权，绑定到具体 `session_id`、`source_turn_id`、`input_id` 和一个明确事项。例如原话“记住语速慢一点，别记今天失眠。”仅能登记 `save_authorized=True, authorized_text="语速慢一点"`。随后 `save` 使用同一事项的 `value="语速慢一点"`。`authorized_text` 与 `value` 按 NFKC 归一化并忽略空白后**必须完全相等**（含标点），只传片段或带句号都会 403；授权片段本身不能是排除指令（`别记…` 直接 400）。改写、归纳、授权不清或一轮里有多件难以区分的事项时，提交可编辑草稿让用户确认。`confirm` 是用户本人的明确确认，因此即使原回合没有 `save_authorized` 也可以确认草稿；仅凭旧记忆、模型猜测或视觉观察不构成新的写入授权。
 
 模块提供 `list_memories(user_id)` 和 `apply_memory(user_id, cmd)`。HTTP 适配层用 `apply_memory_with_status(user_id, cmd)` 取得 `(结果, 状态码)`。每个命令携带服务端生成的稳定 `request_id`。聊天来源须包含 `session_id, source_turn_id`，记忆类型仅限 `preference` 和 `follow_up`。
 
@@ -56,9 +56,20 @@ Flask 根据已认证用户的正式输入识别授权，绑定到具体 `sessio
 | 读取已生效事项 | `GET /api/memories` → `list_memories` | 200，`{"items":[...]}`；无记录时为空数组 |
 | 用户明确授权保存 | `save(kind, value)` 带来源；相同来源重放保持幂等 | 事务提交后才发 `memory.saved`，只携带 `memory_id, kind` |
 | 提议及确认 | `propose(kind, text)` 带来源；`POST /api/memory-drafts/{id}/confirm` 将可选 `text` 映射到 `confirm.value` | 草稿可编辑。首次确认 201，同文重试 200，异文冲突 409 |
-| 改口或编辑 | `PATCH /api/memories/{id}` 将 `text, revision` 映射为 `update.value, expected_revision` | 成功返回最新记录与版本；超时先 GET，旧版本 409 |
+| 改口或编辑 | `PATCH /api/memories/{id}` 将 `text, revision` 映射为 `update.value, expected_revision` | 成功返回最新记录与版本；超时先 GET，旧版本 409。只能在同一偏好类别内改写（把“语速慢一点”改成“叫我老王”返回 400，需另行提交草稿）；正文限 1–300 字 |
 | 撤回或丢弃 | `DELETE /api/memories/{id}` → `delete`；`DELETE /api/memory-drafts/{id}` → `discard_draft` | 成功 204 空体。删除后失效相关缓存，确认与丢弃冲突返回 409 |
 
 `DomainError` 携带 `status, code, message, retryable`，由 Flask 映射 HTTP。缺少身份返回 401，未获授权的直接保存返回 403，他人资源和不存在的资源同样返回 404。页面恢复时重新读取有效记录与 revision，已删除的偏好和陈旧的 bootstrap 缓存不得再次传入 `ctx.background`。
+
+## 集成时必须守住的四条
+
+1. `ctx.input_id` 在**同一用户内全局唯一**；同一 `input_id` 换会话提交会被当成新来源，可能存成两条。
+2. `history` 只放整句送达的内容（见上文第 5 条），半句、取消中的句子不得计入，否则召回会把没播完的话当事实。
+3. 每个 worker 各自 `configure(store=...)` 一次；多 worker 共享同一个 SQLite 文件不在支持范围内（未开 WAL，高并发会 503）。
+4. 危机话术的 `safety.approval` 未填真实核准人前，`health()["crisis_text_approved"]` 恒为 `false`，不要把它当已核准。
+5. 自定义偏好（无内置类别）必须带 `preference_key`，否则每次都新建一条；内置类别为 `voice_speed`、`address_name`、`language`、`sentence_length`、`subtitle`。
+6. 一个来源回合只承载一次写入：同回合换一件事再 `save` 返回 409，请改用草稿或下一轮授权。
+7. `cancelled` 在生成前、生成后、审核后、交付前会被调用多次，必须是幂等且无副作用的标志读取（不要在回调里做状态迁移）。
+8. `configure()` 用新配置替换整个进程运行时，但**不会**关闭上一个 store；宿主需自行 `store.close()`，否则 Windows 上旧库句柄会阻止删除。
 
 完整数据字段和取消时序见[周末网络契约](../docs/weekend-wire.md)，团队分工见[模块对接表](../docs/weekend-modules.md)。现场由集成、语音与页面负责人共同核对首个可听音、审核字幕与实播文字、插话停声以及重连后的历史记录。

@@ -216,6 +216,16 @@ def test_M23_same_preference_category_replaces_instead_of_duplicating(store):
     assert [m["text"] for m in store.list_memories(A)] == ["叫我老王"]
 
 
+def test_M23b_rephrased_address_lands_in_the_same_slot(store):
+    """'以后叫我小王'/'你就叫我老王' 与 '叫我X' 同槽，改口要替换。"""
+    for number, value in enumerate(("以后叫我小王", "你就叫我老王"), start=1):
+        source(store, value=value, number=number, authorized_text=value)
+        store.apply_memory(A, from_source("save", number=number, kind="preference", value=value))
+    items = store.list_memories(A)
+    assert [m["text"] for m in items] == ["你就叫我老王"]
+    assert items[0]["revision"] == 2
+
+
 def test_M24_unrelated_preference_categories_coexist(store):
     """称呼、语言、语速是三个槽位，不能互相覆盖。"""
     for number, value in enumerate(("叫我小王", "用中文", "语速慢一点"), start=1):
@@ -233,15 +243,14 @@ def test_M25_emergency_phrase_is_not_an_address_preference(store):
 
 
 def test_M26_negated_excerpt_cannot_authorize_its_opposite(store):
-    """'不喜欢慢速' 不能授权 '喜欢慢速'，'别记今天失眠' 不能授权 '今天失眠'。"""
+    """'不喜欢慢速' 不能授权 '喜欢慢速'；'别记今天失眠' 本身就不是授权片段。"""
     store.record_source(A, SESSION, "R1", "asr-1", "记住，我不喜欢慢速。",
                         save_authorized=True, authorized_text="不喜欢慢速")
     fail(403, lambda: store.apply_memory(
         A, from_source("save", number=1, kind="preference", value="喜欢慢速")))
-    store.record_source(A, SESSION, "R2", "asr-2", "记住，别记今天失眠。",
-                        save_authorized=True, authorized_text="别记今天失眠")
-    fail(403, lambda: store.apply_memory(
-        A, from_source("save", number=2, kind="follow_up", value="今天失眠")))
+    fail(400, lambda: store.record_source(
+        A, SESSION, "R2", "asr-2", "记住，别记今天失眠。",
+        save_authorized=True, authorized_text="别记今天失眠"))
     assert store.list_memories(A) == []
 
 

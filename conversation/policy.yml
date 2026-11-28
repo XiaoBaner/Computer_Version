@@ -1,0 +1,58 @@
+{
+  "version": "weekend-v1",
+  "intents": ["listen", "reflect", "clarify", "offer_option", "practice"],
+  "voice_styles": ["neutral", "gentle", "practice", "check_in"],
+  "max_sentences": 2,
+  "max_chars_per_sentence": 60,
+  "max_clarifications": 1,
+  "priorities": ["server_policy", "current_user", "authorized_background", "observations"],
+  "checks": ["diagnosis", "medication", "unsupported_agreement", "third_party_motive", "fabricated_memory", "ignored_correction", "unavailable_capability", "immediate_danger", "turn_cancelled"],
+  "routes": ["urgent", "urgent_medical", "urgent_others", "safety_check", "medication", "diagnosis", "correction", "memory", "recall", "quiet", "suspicion", "boundary", "clarify", "practice", "listen"],
+  "safety": {
+    "approval": {
+      "by": "待团队核准（现场启用前必须替换）",
+      "on": null,
+      "note": "危机话术与求助入口由团队确认后写入本段；service.configure() 会校验枚举、长度与越界措辞。"
+    },
+    "urgent": {
+      "intent": "offer_option",
+      "voice_style": "check_in",
+      "sentences": ["如果你可能马上伤到自己，请立即联系当地急救。", "可以请身边可信的人陪同求助。"]
+    },
+    "urgent_medical": {
+      "intent": "offer_option",
+      "voice_style": "check_in",
+      "sentences": ["请立即联系当地急救。", "如果有人能安全地帮你，请他协助呼叫。"]
+    },
+    "urgent_others": {
+      "intent": "offer_option",
+      "voice_style": "check_in",
+      "sentences": ["请和对方保持安全距离。", "如果可能马上伤到人，请立即联系当地紧急服务。"]
+    },
+    "safety_check": {
+      "intent": "clarify",
+      "voice_style": "check_in",
+      "sentences": ["我想先确认你此刻的安全。", "现在你或身边的人面临马上受伤的危险吗？"]
+    },
+    "medication": {
+      "intent": "offer_option",
+      "voice_style": "gentle",
+      "sentences": ["用药和剂量请和开药的医生或药师确认。", "我可以陪你整理想问的问题。"]
+    },
+    "diagnosis": {
+      "intent": "offer_option",
+      "voice_style": "gentle",
+      "sentences": ["这些困扰值得和专业人员一起评估。", "你最希望先谈哪种变化？"]
+    },
+    "suspicion": {
+      "intent": "reflect",
+      "voice_style": "gentle",
+      "sentences": ["我还不确定对方怎么想。", "当时发生了什么，让你有这种感觉？"]
+    },
+    "boundary": {
+      "intent": "listen",
+      "voice_style": "gentle",
+      "sentences": ["我可以听你说，也能陪你整理现在的困扰。"]
+    }
+  }
+}
